@@ -1,0 +1,175 @@
+# Build, verify and publish the routex-client-cxx NuGet package.
+#
+# Stable tags (no '-' in the version) publish to nuget.org;
+# prerelease tags (containing '-', e.g. v1.2.3-rc.1) publish to the
+# int.nugettest.org integration instance instead.
+#
+# Publishing uses Trusted Publishing (OIDC) — no API key is stored as a
+# secret. A matching policy must exist on each target registry pointing at:
+#   - Repository owner / name: this repository
+#   - Workflow file: publish.yaml
+#   - Environment: release
+# See https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing.
+name: Publish NuGet package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.0.1). The leading 'v' is stripped to form the NuGet version.
+        required: true
+        type: string
+        default: v0.0.0-manual
+
+concurrency:
+  group: publish-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  derive-version:
+    name: Derive package version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      is-prerelease: ${{ steps.derive.outputs.is-prerelease }}
+    steps:
+      - name: Derive version from tag
+        id: derive
+        # On workflow_dispatch the tag is the input; on a tag push it is the
+        # ref name (`v*.*.*`). For any other event neither is populated and
+        # the step errors out.
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag available (not a workflow_dispatch input or tag push)"
+            exit 1
+          fi
+          version="${TAG#v}"
+          if [ -z "$version" ]; then
+            echo "::error::Tag '$TAG' resolves to an empty version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) echo "is-prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "is-prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  build:
+    name: Build
+    needs: derive-version
+    uses: ./.github/workflows/build.yaml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.derive-version.outputs.version }}
+
+  test:
+    name: Verify
+    needs: [derive-version, build]
+    uses: ./.github/workflows/test-nuget.yaml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.derive-version.outputs.version }}
+      artifact-name: nupkg
+    secrets:
+      yaxi-api-key: ${{ secrets.YAXI_API_KEY }}
+      yaxi-key-id: ${{ secrets.YAXI_KEY_ID }}
+      routex-url: ${{ secrets.ROUTEX_URL }}
+
+  unit-tests:
+    name: Unit tests
+    needs: build
+    uses: ./.github/workflows/unit-tests.yaml
+    permissions:
+      contents: read
+    secrets:
+      yaxi-api-key: ${{ secrets.YAXI_API_KEY }}
+      yaxi-key-id: ${{ secrets.YAXI_KEY_ID }}
+      routex-url: ${{ secrets.ROUTEX_URL }}
+
+  publish:
+    name: Publish to ${{ needs.derive-version.outputs.is-prerelease == 'true' && 'int.nugettest.org' || 'nuget.org' }}
+    needs: [derive-version, build, test, unit-tests]
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      # id-token is needed for the OIDC token exchange (NuGet Trusted
+      # Publishing and Sigstore signing for the build provenance attestation)
+      id-token: write
+      contents: read
+      # `attestations: write` persists the SLSA build provenance attestation
+      attestations: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nupkg
+          path: nupkg
+
+      - name: Locate downloaded .nupkg
+        id: nupkg
+        env:
+          PKG_VERSION: ${{ needs.derive-version.outputs.version }}
+        run: |
+          $expected = "routex-client-cxx.$env:PKG_VERSION.nupkg"
+          $nupkg = Join-Path nupkg $expected
+          if (-not (Test-Path $nupkg)) {
+              throw "Expected package not found: $nupkg"
+          }
+          "path=$nupkg" | Out-File $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      # Extract the nupkgs contents so they can be attested as well (see next step)
+      - name: Extract nupkg contents
+        env:
+          NUPKG_PATH: ${{ steps.nupkg.outputs.path }}
+        run: |
+          Expand-Archive `
+              -Path $env:NUPKG_PATH `
+              -DestinationPath "$env:RUNNER_TEMP/nupkg-contents" `
+              -Force
+
+      # Generates a Sigstore-signed SLSA build provenance attestation tying the
+      # .nupkg to this workflow run.    
+      # Note that NuGet Gallery modifies the uploaded zip, so verification is
+      # not so straightforward. See
+      # https://github.com/NuGet/NuGetGallery/issues/10026 for details
+      - name: Attest build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            ${{ steps.nupkg.outputs.path }}
+            ${{ runner.temp }}/nupkg-contents/runtimes/**/*.dll
+            ${{ runner.temp }}/nupkg-contents/runtimes/**/*.dll.lib
+            ${{ runner.temp }}/nupkg-contents/runtimes/**/*.pdb
+
+      # Exchanges the GitHub OIDC token for a short-lived (1 hour) API key on
+      # the chosen registry. Must run immediately before the push.
+      - name: NuGet login (OIDC -> temporary API key)
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ secrets.NUGET_USER }}
+          token-service-url: ${{ needs.derive-version.outputs.is-prerelease == 'true' && 'https://int.nugettest.org/api/v2/token' || 'https://www.nuget.org/api/v2/token' }}
+          audience: ${{ needs.derive-version.outputs.is-prerelease == 'true' && 'https://int.nugettest.org' || 'https://www.nuget.org' }}
+
+      - name: Push package
+        env:
+          NUPKG_PATH: ${{ steps.nupkg.outputs.path }}
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          NUGET_SOURCE: ${{ needs.derive-version.outputs.is-prerelease == 'true' && 'https://apiint.nugettest.org/v3/index.json' || 'https://api.nuget.org/v3/index.json' }}
+        run: |
+          dotnet nuget push $env:NUPKG_PATH `
+              --api-key $env:NUGET_API_KEY `
+              --source $env:NUGET_SOURCE `
+              --skip-duplicate

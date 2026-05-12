@@ -1,0 +1,170 @@
+# Reusable workflow: build all Rust targets (debug + release) and pack a NuGet
+# package via scripts/create-nuget.ps1. Produces the .nupkg as a workflow
+# artifact and exposes its filename as an output.
+name: Build NuGet package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: NuGet package version (e.g. 0.0.1 or 0.0.1-ci.42)
+        required: true
+        type: string
+      artifact-name:
+        description: Workflow artifact name under which the .nupkg is uploaded
+        required: false
+        type: string
+        default: nupkg
+    outputs:
+      nupkg-filename:
+        description: Filename of the produced .nupkg
+        value: ${{ jobs.pack.outputs.nupkg-filename }}
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-pc-windows-msvc
+          - i686-pc-windows-msvc
+          - x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --no-self-update --target ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Document build tools
+        run: |
+          Write-Output "::group::Rust"
+          rustc --version --verbose
+          cargo --version --verbose
+          Write-Output "::endgroup::"
+
+          Write-Output "::group::Visual Studio install"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          & $vswhere -latest -products * `
+              -property displayName `
+              -property installationVersion `
+              -property installationPath `
+              -property catalog_productLineVersion
+          Write-Output "::endgroup::"
+
+          Write-Output "::group::MSVC compiler / linker"
+          $cl = & $vswhere -latest `
+              -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\cl.exe' |
+              Select-Object -First 1
+          if ($cl) {
+              Write-Output "cl.exe: $cl"
+              & $cl 2>&1 | Select-Object -First 2
+          }
+          $link = & $vswhere -latest `
+              -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\link.exe' |
+              Select-Object -First 1
+          if ($link) {
+              Write-Output "link.exe: $link"
+              & $link 2>&1 | Select-Object -First 1
+          }
+          Write-Output "::endgroup::"
+
+          Write-Output "::group::Windows SDK"
+          Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match '^10\.' } |
+              Select-Object -ExpandProperty Name
+          Write-Output "::endgroup::"
+
+      - name: Build release DLL
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Verify release DLL dependencies
+        run: |
+          ./scripts/analyze-dll-deps.ps1 ./target/${{ matrix.target }}/release/routex_client_cxx.dll Release
+
+      - name: Build debug DLL
+        run: |
+          . ./scripts/debug-flags.ps1
+          Invoke-WithDebugFlags { cargo build --locked --target ${{ matrix.target }} }
+
+      - name: Verify debug DLL dependencies
+        run: |
+          ./scripts/analyze-dll-deps.ps1 ./target/${{ matrix.target }}/debug/routex_client_cxx.dll Debug
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/*.dll
+            target/${{ matrix.target }}/release/*.dll.lib
+            target/${{ matrix.target }}/debug/*.dll
+            target/${{ matrix.target }}/debug/*.dll.lib
+            target/${{ matrix.target }}/debug/*.pdb
+          if-no-files-found: error
+          retention-days: 7
+
+  pack:
+    name: Pack NuGet package
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      nupkg-filename: ${{ steps.pack.outputs.nupkg-filename }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: build-*
+          path: artifacts
+
+      - name: Restore target/ layout from artifacts
+        run: |
+          New-Item -ItemType Directory -Path target -Force | Out-Null
+          Get-ChildItem -Path artifacts -Directory | ForEach-Object {
+              $triplet = $_.Name -replace '^build-', ''
+              Move-Item -Path $_.FullName -Destination (Join-Path 'target' $triplet)
+          }
+
+      - name: Pack
+        id: pack
+        env:
+          PKG_VERSION: ${{ inputs.version }}
+        run: |
+          ./scripts/create-nuget.ps1 -Version $env:PKG_VERSION
+          $nupkg = Get-ChildItem -Path . -Filter 'routex-client-cxx.*.nupkg' |
+              Select-Object -First 1
+          if (-not $nupkg) { throw 'No .nupkg produced by create-nuget.ps1' }
+          "nupkg-filename=$($nupkg.Name)" |
+              Out-File $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ steps.pack.outputs.nupkg-filename }}
+          if-no-files-found: error
+          retention-days: 30

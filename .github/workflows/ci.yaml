@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  rust:
+    name: Rust (fmt + clippy)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - run: rustup toolchain install stable --component rustfmt,clippy --no-self-update
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: |
+          . ./scripts/debug-flags.ps1
+          Invoke-WithDebugFlags { cargo clippy --all-targets --locked -- -W clippy::pedantic -D warnings }
+
+  cargo-deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: EmbarkStudios/cargo-deny-action@7343aaf3a9563e7c5e0e8bac3896a292217cb163 # v2.0.19
+
+  zizmor:
+    name: Workflow files (zizmor)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@b572f7b1a1c2d41efaab43d504f68d215c3cd727 # v0.5.4
+
+  powershell:
+    name: PowerShell (formatting + PSScriptAnalyzer)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          $failed = @()
+          $scripts = Get-ChildItem -Recurse -Filter "*.ps1" |
+              Where-Object { $_.FullName -notlike "*/target/*" }
+          foreach ($script in $scripts) {
+              $original = Get-Content $script.FullName -Raw
+              $formatted = Invoke-Formatter -ScriptDefinition $original
+              if ($original -eq $formatted) { continue }
+
+              $failed += $script.FullName
+              $tmp = New-TemporaryFile
+              try {
+                  [System.IO.File]::WriteAllText(
+                      $tmp.FullName,
+                      $formatted,
+                      [System.Text.UTF8Encoding]::new($false))
+                  Write-Output "::group::Formatting diff for $($script.FullName)"
+                  & /usr/bin/diff -u `
+                      --label "actual/$($script.Name)" `
+                      --label "formatted/$($script.Name)" `
+                      $script.FullName $tmp.FullName
+                  Write-Output "::endgroup::"
+              }
+              finally {
+                  Remove-Item $tmp.FullName -ErrorAction SilentlyContinue
+              }
+          }
+          if ($failed.Count -gt 0) {
+              Write-Output "::error::Formatting differs from Invoke-Formatter for: $($failed -join ', ')"
+              exit 1
+          }
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Get-ChildItem -Recurse -Filter "*.ps1" |
+              Where-Object { $_.FullName -notlike "*/target/*" } |
+              ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error, Warning }
+          if ($results) {
+              $results | Format-Table -AutoSize
+              exit 1
+          }
+
+  cpp:
+    name: C++ (clang-format + clang-tidy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install clang tools
+        run: sudo apt-get install -y clang-format clang-tidy
+
+      - name: clang-format
+        run: |
+          find . \( -path ./.git -o -path ./target \) -prune -o \
+               \( -name "*.cpp" -o -name "*.cc" -o -name "*.h" \) -print \
+               | xargs clang-format --dry-run --Werror
+
+      - name: clang-tidy (header)
+        run: |
+          echo '#include "include/yaxi/routex-client.h"' > /tmp/lint_header.cc
+          clang-tidy /tmp/lint_header.cc -- \
+            -std=c++17 \
+            -I"$GITHUB_WORKSPACE" \
+            -Wno-unknown-pragmas
+
+  derive-version:
+    name: Derive package version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Read Cargo.toml version and append -ci.<run_number>
+        id: derive
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          base=$(grep -E '^version = "' Cargo.toml | head -n 1 | sed -E 's/version = "(.*)"/\1/')
+          if [ -z "$base" ]; then
+            echo "::error::Could not read version from Cargo.toml"
+            exit 1
+          fi
+          echo "version=${base}-ci.${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: derive-version
+    uses: ./.github/workflows/build.yaml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.derive-version.outputs.version }}
+
+  test:
+    name: Verify
+    needs: [derive-version, build]
+    uses: ./.github/workflows/test-nuget.yaml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.derive-version.outputs.version }}
+      artifact-name: nupkg
+    secrets:
+      yaxi-api-key: ${{ secrets.YAXI_API_KEY }}
+      yaxi-key-id: ${{ secrets.YAXI_KEY_ID }}
+      routex-url: ${{ secrets.ROUTEX_URL }}
+
+  unit-tests:
+    name: Unit tests
+    needs: build
+    uses: ./.github/workflows/unit-tests.yaml
+    permissions:
+      contents: read
+    secrets:
+      yaxi-api-key: ${{ secrets.YAXI_API_KEY }}
+      yaxi-key-id: ${{ secrets.YAXI_KEY_ID }}
+      routex-url: ${{ secrets.ROUTEX_URL }}

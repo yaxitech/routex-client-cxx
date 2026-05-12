@@ -1,0 +1,22 @@
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "No upstream fix available (see https://github.com/RustCrypto/RSA/issues/19). The crate is only used to verify RSA signatures, not for decryption or signing, so it doesn't do operations with a private RSA key." },
+    { id = "RUSTSEC-2024-0436", reason = "Informational advisory: crate is unmaintained. As a feature-complete proc-macro with narrow scope, it carries no runtime risk, and any future issue would surface at build time." },
+]
+
+[bans]
+wildcards = "deny"
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <routex-client-cxxPackageRoot>$(MSBuildThisFileDirectory)..\</routex-client-cxxPackageRoot>
+
+    <routex-client-cxxIncludePath>$(routex-client-cxxPackageRoot)build\native\include\</routex-client-cxxIncludePath>
+
+    <routex-client-cxxRid Condition="'$(Platform)' == 'x64'">win-x64</routex-client-cxxRid>
+    <routex-client-cxxRid Condition="'$(Platform)' == 'Win32'">win-x86</routex-client-cxxRid>
+    <routex-client-cxxRid Condition="'$(Platform)' == 'ARM64'">win-arm64</routex-client-cxxRid>
+    <routex-client-cxxRid Condition="'$(routex-client-cxxRid)' == ''">win-x64</routex-client-cxxRid>
+
+    <routex-client-cxxNativeDir Condition="'$(Configuration)' == 'Debug'">$(routex-client-cxxPackageRoot)runtimes\$(routex-client-cxxRid)\native\debug\</routex-client-cxxNativeDir>
+    <routex-client-cxxNativeDir Condition="'$(Configuration)' != 'Debug'">$(routex-client-cxxPackageRoot)runtimes\$(routex-client-cxxRid)\native\</routex-client-cxxNativeDir>
+
+    <routex-client-cxxLibFile>$(routex-client-cxxNativeDir)routex_client_cxx.dll.lib</routex-client-cxxLibFile>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(routex-client-cxxIncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+
+    <Link>
+      <AdditionalDependencies>$(routex-client-cxxLibFile);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(routex-client-cxxNativeDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>

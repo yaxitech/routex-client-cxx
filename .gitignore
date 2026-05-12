@@ -1,0 +1,13 @@
+.DS_Store
+result
+/target
+
+/test/dll/build/
+/test/dll/build.tmp/
+/test/dll/packages/
+
+/tests/unit/build/
+
+/.nuget-local
+/nuget-pkg
+*.nupkg

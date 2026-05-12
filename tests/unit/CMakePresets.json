@@ -1,0 +1,160 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "base-windows",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "base-unix",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "displayName": "MSVC Debug",
+      "inherits": "base-windows"
+    },
+    {
+      "name": "msvc-release",
+      "displayName": "MSVC Release",
+      "inherits": "base-windows"
+    },
+    {
+      "name": "msvc-asan",
+      "displayName": "MSVC Debug + ASan",
+      "inherits": "base-windows",
+      "cacheVariables": {
+        "YAXI_SANITIZER": "address"
+      }
+    },
+    {
+      "name": "gcc-debug",
+      "displayName": "GCC Debug",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "displayName": "GCC Release",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "gcc-asan",
+      "displayName": "GCC Debug + ASan/UBSan",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "YAXI_SANITIZER": "address+undefined"
+      }
+    },
+    {
+      "name": "clang-debug",
+      "displayName": "Clang Debug",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "clang-release",
+      "displayName": "Clang Release",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "clang-asan",
+      "displayName": "Clang Debug + ASan/UBSan",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "YAXI_SANITIZER": "address+undefined"
+      }
+    },
+    {
+      "name": "clang-tsan",
+      "displayName": "Clang Debug + TSan",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "YAXI_SANITIZER": "thread"
+      }
+    },
+    {
+      "name": "clang-msan",
+      "displayName": "Clang Debug + MSan",
+      "inherits": "base-unix",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "YAXI_SANITIZER": "memory"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "msvc-debug",    "configurePreset": "msvc-debug",    "configuration": "Debug",   "targets": ["yaxi_unit_tests"] },
+    { "name": "msvc-release",  "configurePreset": "msvc-release",  "configuration": "Release", "targets": ["yaxi_unit_tests"] },
+    { "name": "msvc-asan",     "configurePreset": "msvc-asan",     "configuration": "Debug",   "targets": ["yaxi_unit_tests"] },
+    { "name": "gcc-debug",     "configurePreset": "gcc-debug",     "configuration": "Debug",   "targets": ["yaxi_unit_tests"] },
+    { "name": "gcc-release",   "configurePreset": "gcc-release",   "configuration": "Release", "targets": ["yaxi_unit_tests"] },
+    { "name": "gcc-asan",      "configurePreset": "gcc-asan",      "configuration": "Debug",   "targets": ["yaxi_unit_tests"] },
+    { "name": "clang-debug",   "configurePreset": "clang-debug",   "configuration": "Debug",   "targets": ["yaxi_unit_tests"] },
+    { "name": "clang-release", "configurePreset": "clang-release", "configuration": "Release", "targets": ["yaxi_unit_tests"] },
+    { "name": "clang-asan",    "configurePreset": "clang-asan",    "configuration": "Debug",   "targets": ["yaxi_unit_tests"] },
+    { "name": "clang-tsan",    "configurePreset": "clang-tsan",    "configuration": "Debug",   "targets": ["yaxi_unit_tests"] },
+    { "name": "clang-msan",    "configurePreset": "clang-msan",    "configuration": "Debug",   "targets": ["yaxi_unit_tests"] }
+  ],
+  "testPresets": [
+    { "name": "msvc-debug",    "configurePreset": "msvc-debug",    "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "msvc-release",  "configurePreset": "msvc-release",  "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "msvc-asan",     "configurePreset": "msvc-asan",     "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "gcc-debug",     "configurePreset": "gcc-debug",     "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "gcc-release",   "configurePreset": "gcc-release",   "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "gcc-asan",      "configurePreset": "gcc-asan",      "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "clang-debug",   "configurePreset": "clang-debug",   "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "clang-release", "configurePreset": "clang-release", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "clang-asan",    "configurePreset": "clang-asan",    "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "clang-tsan",    "configurePreset": "clang-tsan",    "configuration": "Debug",   "output": { "outputOnFailure": true } },
+    { "name": "clang-msan",    "configurePreset": "clang-msan",    "configuration": "Debug",   "output": { "outputOnFailure": true } }
+  ]
+}

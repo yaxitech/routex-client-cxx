@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>routex-client-cxx</id>
+    <version>$version$</version>
+    <authors>YAXI GmbH</authors>
+    <description>C++ client for Windows for YAXI's Open Banking services</description>
+    <repository type="git" url="https://github.com/yaxitech/routex-client-cxx" commit="$commit$" />
+    <license type="expression">Apache-2.0</license>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <readme>README.md</readme>
+    <tags>routex openbanking</tags>
+  </metadata>
+  <files>
+    <!-- README (shown on nuget.org and in IDE package details) -->
+    <file src="README.md"                         target="README.md" />
+
+    <!-- Release DLLs -->
+    <file src="runtimes\win-x86\native\*"         target="runtimes\win-x86\native\" />
+    <file src="runtimes\win-x64\native\*"         target="runtimes\win-x64\native\" />
+    <file src="runtimes\win-arm64\native\*"       target="runtimes\win-arm64\native\" />
+
+    <!-- Debug DLLs + PDBs -->
+    <file src="runtimes\win-x86\native\debug\*"   target="runtimes\win-x86\native\debug\" />
+    <file src="runtimes\win-x64\native\debug\*"   target="runtimes\win-x64\native\debug\" />
+    <file src="runtimes\win-arm64\native\debug\*" target="runtimes\win-arm64\native\debug\" />
+
+    <!-- Public headers -->
+    <file src="include\**"                        target="build\native\include\" />
+
+    <!-- MSBuild props/targets -->
+    <file src="build\routex-client-cxx.props"                  target="build\routex-client-cxx.props" />
+    <file src="build\routex-client-cxx.targets"                target="build\routex-client-cxx.targets" />
+    <file src="build\routex-client-cxx.props"                  target="buildTransitive\routex-client-cxx.props" />
+    <file src="build\routex-client-cxx.targets"                target="buildTransitive\routex-client-cxx.targets" />
+  </files>
+</package>

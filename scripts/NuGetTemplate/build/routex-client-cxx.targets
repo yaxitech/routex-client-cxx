@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <routex-client-cxxRuntimesDir>$(MSBuildThisFileDirectory)..\runtimes\</routex-client-cxxRuntimesDir>
+
+    <routex-client-cxxRid Condition="'$(Platform)' == 'x64'">win-x64</routex-client-cxxRid>
+    <routex-client-cxxRid Condition="'$(Platform)' == 'Win32'">win-x86</routex-client-cxxRid>
+    <routex-client-cxxRid Condition="'$(Platform)' == 'ARM64'">win-arm64</routex-client-cxxRid>
+    <!-- Default to x64 -->
+    <routex-client-cxxRid Condition="'$(routex-client-cxxRid)' == ''">win-x64</routex-client-cxxRid>
+
+    <routex-client-cxxNativeDir Condition="'$(Configuration)' == 'Debug'">$(routex-client-cxxRuntimesDir)$(routex-client-cxxRid)\native\debug\</routex-client-cxxNativeDir>
+    <routex-client-cxxNativeDir Condition="'$(Configuration)' != 'Debug'">$(routex-client-cxxRuntimesDir)$(routex-client-cxxRid)\native\</routex-client-cxxNativeDir>
+  </PropertyGroup>
+
+  <!-- Copy the DLL to the output directory -->
+  <ItemGroup>
+    <None Include="$(routex-client-cxxNativeDir)routex_client_cxx.dll" Condition="Exists('$(routex-client-cxxNativeDir)routex_client_cxx.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+    <!-- Copy PDB only for debug builds -->
+    <None Include="$(routex-client-cxxNativeDir)routex_client_cxx.pdb" Condition="Exists('$(routex-client-cxxNativeDir)routex_client_cxx.pdb') And '$(Configuration)' == 'Debug'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+</Project>

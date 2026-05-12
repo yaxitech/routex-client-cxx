@@ -1,0 +1,116 @@
+# Reusable workflow: verify the produced NuGet package by installing it into
+# the tests/dll MSVC project, building it with msbuild for x86 + x64 in both
+# Debug and Release, and (when the YAXI secrets are available) executing
+# tests/dll/test.ps1 against the resulting DLL.
+name: Verify NuGet package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version of the .nupkg being verified (used to locate the extracted package)
+        required: true
+        type: string
+      artifact-name:
+        description: Workflow artifact name that holds the .nupkg
+        required: true
+        type: string
+    secrets:
+      yaxi-api-key:
+        required: false
+      yaxi-key-id:
+        required: false
+      routex-url:
+        required: false
+
+permissions: {}
+
+jobs:
+  test:
+    name: ${{ matrix.platform }} ${{ matrix.configuration }}
+    # windows-2025-vs2026 for v145 platform toolset
+    runs-on: windows-2025-vs2026
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [Win32, x64]
+        configuration: [Debug, Release]
+        include:
+          - platform: Win32
+            solutionPlatform: x86
+            rid: win-x86
+          - platform: x64
+            solutionPlatform: x64
+            rid: win-x64
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: nupkg-download
+
+      - name: Locate downloaded .nupkg
+        id: nupkg
+        run: |
+          $nupkg = Get-ChildItem -Path nupkg-download -Filter 'routex-client-cxx.*.nupkg' |
+              Select-Object -First 1
+          if (-not $nupkg) { throw 'No .nupkg found in downloaded artifact' }
+          "path=$($nupkg.FullName)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding UTF8
+
+      - name: Install NuGet package into test project
+        env:
+          NUPKG_PATH: ${{ steps.nupkg.outputs.path }}
+        run: |
+          ./scripts/add-nuget-package.ps1 `
+              -NugetPackagePath $env:NUPKG_PATH `
+              -VcxprojPath tests/dll/test_dll.vcxproj `
+              -Verbose
+
+      - name: Build test_dll (${{ matrix.platform }} / ${{ matrix.configuration }})
+        run: |
+          msbuild tests/dll/test_dll.sln `
+              /p:Configuration=${{ matrix.configuration }} `
+              /p:Platform=${{ matrix.solutionPlatform }} `
+              /m `
+              /nologo
+
+      - name: Run test.ps1
+        # Only runs when all three runtime secrets are available (push to main,
+        # workflow_dispatch, or PR from a trusted branch). Forks without
+        # secrets get a build-only check.
+        if: >-
+          env.YAXI_API_KEY != '' &&
+          env.YAXI_KEY_ID != '' &&
+          env.ROUTEX_URL != ''
+        env:
+          YAXI_API_KEY: ${{ secrets.yaxi-api-key }}
+          YAXI_KEY_ID: ${{ secrets.yaxi-key-id }}
+          ROUTEX_URL: ${{ secrets.routex-url }}
+          PKG_VERSION: ${{ inputs.version }}
+        run: |
+          $dllPath = "tests/dll/build/${{ matrix.platform }}/${{ matrix.configuration }}/app/test_dll.dll"
+          $nativeSubdir = if ('${{ matrix.configuration }}' -eq 'Debug') { 'native/debug' } else { 'native' }
+          $dllDir = "tests/dll/packages/routex-client-cxx.$env:PKG_VERSION/runtimes/${{ matrix.rid }}/$nativeSubdir"
+          if ('${{ matrix.platform }}' -eq 'Win32') {
+              # A 32-bit DLL can only be LoadLibraryEx'd by a 32-bit host process.
+              # Shell out to the 32-bit Windows PowerShell instead of the
+              # 64-bit pwsh that drives the rest of this step.
+              & 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe' `
+                  -NoProfile -ExecutionPolicy Bypass `
+                  -File ./tests/dll/test.ps1 -DllPath $dllPath -DllDirectory $dllDir
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          else {
+              ./tests/dll/test.ps1 -DllPath $dllPath -DllDirectory $dllDir
+          }
