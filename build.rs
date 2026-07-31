@@ -50,11 +50,20 @@ fn configure_windows(build: &mut cc::Build) {
     build.static_crt(false).define("YAXI_BUILDING_DLL", None);
 
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+
     let mut res = winresource::WindowsResource::new();
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+
+    res.set("FileVersion", &version);
+    res.set("ProductVersion", &version);
+    res.set("FileDescription", "YAXI Open Banking services client");
+    res.set("LegalCopyright", "Copyright 2024");
+
     if let Ok(commit) = std::env::var("GITHUB_SHA") {
         res.set("Comments", &format!("Commit: {commit}"));
     }
-    res.compile().unwrap();
+
+    res.compile().unwrap(); 
 }
 
 #[cfg(windows)]
