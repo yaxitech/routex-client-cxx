@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <format>
 #include <optional>
 #include <string>
 #include <variant>
@@ -190,6 +191,12 @@ TEST_CASE_METHOD(OnlineFixture, "Service Balances", "[online][balances]") {
     auto &sr = requireServiceResult(confirmResult);
     auto payload = jwtDecodeUnverified(sr.jwt);
     REQUIRE(payload.at("data").at("ticketId") == TicketGenerator::getId(balancesTicket));
+    for (auto &account : payload.at("data").at("data").at("balances")) {
+        for (auto &balance : account.at("balances")) {
+            REQUIRE(balance.at("dateTime").is_string());
+            balance.erase("dateTime");
+        }
+    }
     REQUIRE(payload.at("data").at("data") ==
             json{
                 {"balances",
@@ -264,17 +271,19 @@ TEST_CASE_METHOD(OnlineFixture, "Connection info", "[online][search]") {
     }
 }
 
-TEST_CASE_METHOD(OnlineFixture, "Search with BIC details", "[online][search]") {
+TEST_CASE_METHOD(OnlineFixture, "Search with BIC and bank code details", "[online][search]") {
     auto accountsTicket = generator.accounts(uuidV4());
     std::vector<SearchFilter> filters{NameSearchFilter{.name = "C24 Bank"}};
     auto result = client.search(accountsTicket, filters, /*ibanDetection=*/false,
-                                /*limit=*/std::nullopt, {Details::Bics});
+                                /*limit=*/std::nullopt, {Details::Bics, Details::BankCodes});
     REQUIRE_THAT(result, HoldsAlternative<std::vector<ConnectionInfo>>());
     auto &infos = std::get<std::vector<ConnectionInfo>>(result);
     REQUIRE_FALSE(infos.empty());
     for (auto &info : infos) {
         REQUIRE(info.bics.has_value());
         CHECK(*info.bics == std::vector<std::string>{"DEFFDEFFXXX"});
+        REQUIRE(info.bankCodes.has_value());
+        CHECK(*info.bankCodes == std::vector<std::string>{"50024024"});
     }
 }
 
@@ -320,6 +329,82 @@ TEST_CASE_METHOD(OnlineFixture, "Service Transactions", "[online][transactions]"
             {"status", "Booked"},
             {"valueDate", "2025-07-29"},
         });
+}
+
+TEST_CASE_METHOD(OnlineFixture, "Services without credentials", "[online][without_credentials]") {
+    // The demo "refresh" user returns a result right away, providing reusable connection data.
+    Credentials creds{};
+    creds.connectionId = DEMO_CONNECTION_ID;
+    creds.userId = "refresh";
+
+    auto bootstrapResult = client.accounts(creds, generator.accounts(uuidV4()), {});
+    auto &bootstrap = requireServiceResult(bootstrapResult);
+    REQUIRE(bootstrap.connectionData.has_value());
+    auto connectionData = *bootstrap.connectionData;
+
+    auto accountsTicket = generator.accounts(uuidV4());
+    auto accountsResult = client.accounts(connectionData, accountsTicket,
+                                          {AccountField::Iban, AccountField::OwnerName});
+    auto &accountsSr = requireServiceResult(accountsResult);
+    auto accountsPayload = jwtDecodeUnverified(accountsSr.jwt);
+    REQUIRE(accountsPayload.at("data").at("ticketId") == TicketGenerator::getId(accountsTicket));
+    REQUIRE(accountsPayload.at("data").at("data") == json{{
+                                                         {"iban", "DE02120300000000202051"},
+                                                         {"ownerName", "Dr. Peter Steiger"},
+                                                     }});
+
+    auto balancesTicket = generator.issue(uuidV4(), "Balances");
+    std::vector<AccountReference> accounts{
+        AccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}},
+    };
+    auto balancesResult = client.balances(connectionData, balancesTicket, accounts);
+    auto &balancesSr = requireServiceResult(balancesResult);
+    auto balancesPayload = jwtDecodeUnverified(balancesSr.jwt);
+    for (auto &account : balancesPayload.at("data").at("data").at("balances")) {
+        for (auto &balance : account.at("balances")) {
+            balance.erase("dateTime");
+        }
+    }
+    REQUIRE(balancesPayload.at("data").at("data") ==
+            json{
+                {"balances",
+                 {{
+                     {"account", {{"currency", "EUR"}, {"iban", "DE02120300000000202051"}}},
+                     {"balances",
+                      {
+                          {{"amount", "8877.78"},
+                           {"balanceType", "Booked"},
+                           {"currency", "EUR"},
+                           {"creditLimitIncluded", false}},
+                          {{"amount", "8947.64"},
+                           {"balanceType", "Available"},
+                           {"currency", "EUR"},
+                           {"creditLimitIncluded", false}},
+                      }},
+                 }}},
+            });
+
+    auto from = std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now()) -
+                std::chrono::days{89};
+    json transactionsData = {
+        {"account", {{"iban", "DE02120300000000202051"}, {"currency", "EUR"}}},
+        {"range", {{"from", std::format("{:%F}", from)}}},
+    };
+    auto transactionsTicket = generator.transactions(uuidV4(), transactionsData);
+    auto transactionsResult = client.transactions(connectionData, transactionsTicket);
+    auto &transactionsSr = requireServiceResult(transactionsResult);
+    auto transactionsPayload = jwtDecodeUnverified(transactionsSr.jwt);
+    REQUIRE(transactionsPayload.at("data").at("ticketId") ==
+            TicketGenerator::getId(transactionsTicket));
+    REQUIRE_FALSE(transactionsPayload.at("data").at("data").empty());
+
+    // A period the bank cannot serve under an SCA exemption needs a user in session.
+    json pastData = transactionsData;
+    pastData["range"]["from"] = "2019-01-13";
+    auto pastResult =
+        client.transactions(connectionData, generator.transactions(uuidV4(), pastData));
+    REQUIRE_THAT(pastResult, HoldsAlternative<Error>());
+    REQUIRE_THAT(std::get<Error>(pastResult), HoldsAlternative<InterruptError>());
 }
 
 TEST_CASE_METHOD(OnlineFixture, "Redirect: RedirectHandle", "[online][redirect]") {

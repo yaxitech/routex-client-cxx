@@ -3,7 +3,6 @@ use chrono::{TimeZone, Utc};
 use cxx::{CxxString, CxxVector, UniquePtr};
 use paste::paste;
 use reqwest::header::InvalidHeaderValue;
-use routex_api::collect_payment::{DebtorAccountIdentifier, DebtorAccountReference};
 use routex_client::prelude::*;
 use routex_client_common::with_any_service;
 use tokio::runtime::Runtime;
@@ -62,6 +61,15 @@ mod ffi {
             recurring_consents: TriBool,
         ) -> Result<ServiceResult>;
 
+        fn accounts_without_credentials(
+            self: &RoutexClient,
+            connection_data: &CxxVector<u8>,
+            ticket: &CxxString,
+            fields: &CxxVector<AccountField>,
+            filter: &UniquePtr<AccountFilter>,
+            session: &UniquePtr<CxxVector<u8>>,
+        ) -> Result<ServiceResult>;
+
         fn respond_accounts(
             self: &RoutexClient,
             ticket: &CxxString,
@@ -88,6 +96,14 @@ mod ffi {
             recurring_consents: TriBool,
         ) -> Result<ServiceResult>;
 
+        fn balances_without_credentials(
+            self: &RoutexClient,
+            connection_data: &CxxVector<u8>,
+            ticket: &CxxString,
+            accounts: &CxxVector<AccountReference>,
+            session: &UniquePtr<CxxVector<u8>>,
+        ) -> Result<ServiceResult>;
+
         fn respond_balances(
             self: &RoutexClient,
             ticket: &CxxString,
@@ -111,6 +127,13 @@ mod ffi {
             ticket: &CxxString,
             session: &UniquePtr<CxxVector<u8>>,
             recurring_consents: TriBool,
+        ) -> Result<ServiceResult>;
+
+        fn transactions_without_credentials(
+            self: &RoutexClient,
+            connection_data: &CxxVector<u8>,
+            ticket: &CxxString,
+            session: &UniquePtr<CxxVector<u8>>,
         ) -> Result<ServiceResult>;
 
         fn respond_transactions(
@@ -308,7 +331,6 @@ mod ffi {
         InvalidCredentials,
         ServiceBlocked,
         Unauthorized,
-        ConsentExpired,
         AccessExceeded,
         PeriodOutOfBounds,
         UnsupportedProduct,
@@ -318,6 +340,7 @@ mod ffi {
         ProviderError,
         ResponseError,
         NotFound,
+        InterruptError,
     }
 
     #[derive(Debug)]
@@ -366,6 +389,7 @@ mod ffi {
     #[derive(Debug)]
     enum Details {
         Bics,
+        BankCodes,
     }
 
     #[derive(Debug)]
@@ -382,6 +406,9 @@ mod ffi {
         logo_id: String,
         bics_set: bool,
         bics: Vec<String>,
+        bank_codes_set: bool,
+        bank_codes: Vec<String>,
+        labels: Vec<String>,
     }
 
     #[derive(Debug)]
@@ -518,9 +545,6 @@ impl From<routex_client::Error> for ffi::Error {
                 routex_api::Error::Unauthorized { user_message, .. } => {
                     (ErrorKind::Unauthorized, user_message, None)
                 }
-                routex_api::Error::ConsentExpired { user_message, .. } => {
-                    (ErrorKind::ConsentExpired, user_message, None)
-                }
                 routex_api::Error::AccessExceeded { user_message, .. } => {
                     (ErrorKind::AccessExceeded, user_message, None)
                 }
@@ -556,9 +580,7 @@ impl From<routex_client::Error> for ffi::Error {
                     user_message,
                     code.map(|c| c as u8),
                 ),
-                routex_api::Error::InterruptError { .. } => {
-                    (ErrorKind::ResponseError, Some(String::new()), None)
-                }
+                routex_api::Error::InterruptError { .. } => (ErrorKind::InterruptError, None, None),
             },
             Error::ResponseError(response) => (
                 ErrorKind::ResponseError,
@@ -785,6 +807,9 @@ impl From<ConnectionInfo> for ffi::ConnectionInfo {
             logo_id: info.logo_id,
             bics_set: info.bics.is_some(),
             bics: info.bics.unwrap_or_default(),
+            bank_codes_set: info.bank_codes.is_some(),
+            bank_codes: info.bank_codes.unwrap_or_default(),
+            labels: info.labels,
         }
     }
 }
@@ -883,6 +908,15 @@ impl From<&ffi::AccountReference> for AccountReference {
     fn from(account: &ffi::AccountReference) -> Self {
         AccountReference {
             id: AccountIdentifier::Iban(account.iban.clone()),
+            currency: account.currency.as_ref().map(CxxString::to_string),
+        }
+    }
+}
+
+impl From<&ffi::AccountReference> for DebtorAccountReference {
+    fn from(account: &ffi::AccountReference) -> Self {
+        DebtorAccountReference {
+            id: DebtorAccountIdentifier::Iban(account.iban.clone()),
             currency: account.currency.as_ref().map(CxxString::to_string),
         }
     }
@@ -1007,6 +1041,7 @@ impl RoutexClient {
                                 .map(|detail| {
                                     Ok(match *detail {
                                         ffi::Details::Bics => Details::Bics,
+                                        ffi::Details::BankCodes => Details::BankCodes,
                                         _ => bail!("Unexpected Details value"),
                                     })
                                 })
@@ -1055,6 +1090,46 @@ impl RoutexClient {
 }
 
 macro_rules! service {
+    {
+        @without_credentials
+        $service:ident
+        $(($($arg:ident: $type:ty),*$(,)?))?
+        $({$($values:tt)*})?
+    } => {
+        service! {
+            $service
+            $(($($arg: $type),*))?
+            $({$($values)*})?
+        }
+
+        paste! {
+            impl RoutexClient {
+                fn [<$service _without_credentials>](
+                    &self,
+                    connection_data: &CxxVector<u8>,
+                    ticket: &CxxString,
+                    $($($arg: $type,)*)?
+                    session: &UniquePtr<CxxVector<u8>>,
+                ) -> anyhow::Result<ffi::ServiceResult> {
+                    let mut request = self.inner.$service(
+                        ConnectionData::from(connection_data.as_slice().to_vec()),
+                        &match ticket.to_string().parse() {
+                            Ok(ticket) => ticket,
+                            Err(err) => return Ok(err.into()),
+                        },
+                        $($($values)*)?
+                    );
+
+                    if let Some(session) = session.as_ref() {
+                        request = request.session(session.as_slice().to_vec().into());
+                    }
+
+                    Ok(self.runtime.block_on(request.send()).into())
+                }
+            }
+        }
+    };
+
     {
         $service:ident
         $(($($arg:ident: $type:ty),*$(,)?))?
@@ -1138,6 +1213,7 @@ macro_rules! service {
 }
 
 service! {
+    @without_credentials
     accounts
     (fields: &CxxVector<ffi::AccountField>, filter: &UniquePtr<ffi::AccountFilter>)
     {
@@ -1147,6 +1223,7 @@ service! {
 }
 
 service! {
+    @without_credentials
     balances
     (accounts: &CxxVector<ffi::AccountReference>)
     {
@@ -1155,6 +1232,7 @@ service! {
 }
 
 service! {
+    @without_credentials
     transactions
 }
 
@@ -1211,7 +1289,7 @@ service! {
         }| {
             let mut details = TransferDetails::new(
                 Amount::new(amount.to_string().parse::<Decimal>()?, currency.to_string()),
-                AccountIdentifier::Iban(creditor_iban.to_string()),
+                CreditorAccountIdentifier::Iban(creditor_iban.to_string()),
                 creditor_name.to_string(),
             );
             details.end_to_end_identification = end_to_end_identification.as_ref().map(CxxString::to_string);

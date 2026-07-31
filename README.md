@@ -14,7 +14,7 @@ Requires Windows, MSVC, and C++17 or newer. Available on NuGet as [`routex-clien
 ```xml
 <!-- packages.config -->
 <packages>
-  <package id="routex-client-cxx" version="0.0.1" targetFramework="native" />
+  <package id="routex-client-cxx" version="0.2.0" targetFramework="native" />
 </packages>
 ```
 
@@ -101,7 +101,8 @@ if (auto* result = std::get_if<ServiceResult>(&response)) {
     // result->session: short-lived, pass to consecutive service calls to speed
     //   up authentication.
     // result->connectionData: persist alongside credentials to reuse the consent
-    //   on subsequent calls (via Credentials.connectionData). Pass
+    //   on subsequent calls (via Credentials.connectionData), or pass it to
+    //   accounts/balances/transactions in place of the credentials. Pass
     //   recurringConsents = true on the service call to request a long-lived
     //   consent that skips the interrupt loop until it expires.
 }
