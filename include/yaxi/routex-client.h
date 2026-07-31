@@ -93,14 +93,6 @@ class YAXI_API Unauthorized : public std::runtime_error {
     std::optional<std::string> userMessage;
 };
 
-class YAXI_API ConsentExpired : public std::runtime_error {
-  public:
-    ConsentExpired(std::optional<std::string> userMessage)
-        : std::runtime_error("Consent expired"), userMessage(std::move(userMessage)) {}
-
-    std::optional<std::string> userMessage;
-};
-
 class YAXI_API AccessExceeded : public std::runtime_error {
   public:
     AccessExceeded(std::optional<std::string> userMessage)
@@ -210,10 +202,24 @@ class YAXI_API NotFound : public std::runtime_error {
     NotFound() : std::runtime_error("Resource not found") {}
 };
 
+/**
+ * The service call requires user interaction to complete.
+ *
+ * Only requests passing `ConnectionData` instead of `Credentials` produce this
+ * error; with `Credentials` a `Dialog` or `Redirect` gets returned instead.
+ * Recover by running the user through a request with `Credentials` and
+ * persisting the `connectionData` it returns.
+ */
+class YAXI_API InterruptError : public std::runtime_error {
+  public:
+    InterruptError()
+        : std::runtime_error("The transaction is not possible without user interaction") {}
+};
+
 using Error = std::variant<RequestError, UnexpectedError, Canceled, InvalidCredentials,
-                           ServiceBlocked, Unauthorized, ConsentExpired, AccessExceeded,
-                           PeriodOutOfBounds, UnsupportedProduct, PaymentFailed, UnexpectedValue,
-                           TicketError, ProviderError, ResponseError, NotFound>;
+                           ServiceBlocked, Unauthorized, AccessExceeded, PeriodOutOfBounds,
+                           UnsupportedProduct, PaymentFailed, UnexpectedValue, TicketError,
+                           ProviderError, ResponseError, NotFound, InterruptError>;
 
 template <typename T> using Result = std::variant<T, Error>;
 
@@ -549,6 +555,18 @@ struct ConnectionInfo {
      * Note that this is only included in search results if requested.
      */
     std::optional<std::vector<std::string>> bics;
+
+    /**
+     * National bank codes (as used in IBANs).
+     *
+     * Note that this is only included in search results if requested.
+     */
+    std::optional<std::vector<std::string>> bankCodes;
+
+    /**
+     * Labels categorizing the connection (e.g. "beta", "fints").
+     */
+    std::vector<std::string> labels;
 };
 
 /**
@@ -599,6 +617,7 @@ using SearchFilter = std::variant<CountriesSearchFilter, NameSearchFilter, BicSe
  */
 enum class Details : uint8_t {
     Bics,
+    BankCodes,
 };
 
 struct Credentials {
@@ -870,7 +889,7 @@ class [[nodiscard]] YAXI_API RoutexClient final {
      * [Accounts service](https://docs.yaxi.tech/accounts.html).
      */
     [[nodiscard]] Result<ServiceResponse>
-    accounts(const Credentials &credentials, const std::string &ticket,
+    accounts(const std::variant<Credentials, ConnectionData> &access, const std::string &ticket,
              const std::vector<AccountField> &fields,
              const std::optional<AccountFilter> &filter = std::nullopt,
              const std::optional<Session> &session = std::nullopt,
@@ -896,7 +915,7 @@ class [[nodiscard]] YAXI_API RoutexClient final {
      * [Balances service](https://docs.yaxi.tech/balances.html).
      */
     [[nodiscard]] Result<ServiceResponse>
-    balances(const Credentials &credentials, const std::string &ticket,
+    balances(const std::variant<Credentials, ConnectionData> &access, const std::string &ticket,
              const std::vector<AccountReference> &accounts,
              const std::optional<Session> &session = std::nullopt,
              const std::optional<bool> &recurringConsents = std::nullopt) const;
@@ -921,7 +940,7 @@ class [[nodiscard]] YAXI_API RoutexClient final {
      * [Transactions service](https://docs.yaxi.tech/transactions.html).
      */
     [[nodiscard]] Result<ServiceResponse>
-    transactions(const Credentials &credentials, const std::string &ticket,
+    transactions(const std::variant<Credentials, ConnectionData> &access, const std::string &ticket,
                  const std::optional<Session> &session = std::nullopt,
                  const std::optional<bool> &recurringConsents = std::nullopt) const;
 

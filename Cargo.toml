@@ -1,6 +1,6 @@
 [package]
 name = "routex-client-cxx"
-version = "0.0.1"
+version = "0.2.0"
 build = "build.rs"
 edition = "2024"
 rust-version = "1.88"
@@ -14,9 +14,9 @@ cxx = "1.0.150"
 jsonwebtoken = { version = "10.1", default-features = false, features = ["rust_crypto"] }
 paste = "1.0.2"
 reqwest = { version = "0.13.2", features = ["rustls"] }
-routex-api = "0.29.0"
-routex-client = "0.18.0"
-routex-client-common = { version = "0.0.4", features = ["error"] }
+routex-api = "0.30.1"
+routex-client = "0.20"
+routex-client-common = { version = "0.0.5", features = ["error"] }
 tokio = { version = "1.40", features = ["rt-multi-thread"] }
 uuid = "1.5"
 
@@ -35,3 +35,4 @@ codegen-units = 1
 
 [package.metadata.winresource]
 FileDescription = "YAXI Open Banking services client"
+CompanyName = "YAXI GmbH"

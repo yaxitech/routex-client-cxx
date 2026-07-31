@@ -50,17 +50,23 @@ template <typename T> inline optional<T> optional_code(unique_ptr<U8> const &val
 }
 
 yaxi::ConnectionInfo convert_connection_info(yaxi::internal::ConnectionInfo info) {
-    return {yaxi::ConnectionId(info.id),
-            convert_vec<string>(info.countries, [](rust::String c) { return string(c); }),
-            string(info.display_name),
-            {info.credentials_full, info.credentials_user, info.credentials_none},
-            optional_string(info.user_id),
-            optional_string(info.password),
-            optional_string(info.advice),
-            string(info.logo_id),
-            info.bics_set ? optional(convert_vec<string>(
-                                info.bics, [](rust::String bic) { return string(bic); }))
-                          : nullopt};
+    return {
+        yaxi::ConnectionId(info.id),
+        convert_vec<string>(info.countries, [](rust::String c) { return string(c); }),
+        string(info.display_name),
+        {info.credentials_full, info.credentials_user, info.credentials_none},
+        optional_string(info.user_id),
+        optional_string(info.password),
+        optional_string(info.advice),
+        string(info.logo_id),
+        info.bics_set
+            ? optional(convert_vec<string>(info.bics, [](rust::String bic) { return string(bic); }))
+            : nullopt,
+        info.bank_codes_set
+            ? optional(convert_vec<string>(info.bank_codes,
+                                           [](rust::String bankCode) { return string(bankCode); }))
+            : nullopt,
+        convert_vec<string>(info.labels, [](rust::String label) { return string(label); })};
 }
 
 yaxi::Error error(internal::Error const &error) {
@@ -78,8 +84,6 @@ yaxi::Error error(internal::Error const &error) {
                               optional_code<ServiceBlocked::Code>(error.code));
     case ErrorKind::Unauthorized:
         return Unauthorized(optional_string(error.string));
-    case ErrorKind::ConsentExpired:
-        return ConsentExpired(optional_string(error.string));
     case ErrorKind::AccessExceeded:
         return AccessExceeded(optional_string(error.string));
     case ErrorKind::PeriodOutOfBounds:
@@ -101,6 +105,8 @@ yaxi::Error error(internal::Error const &error) {
         return ResponseError(string(error.string));
     case ErrorKind::NotFound:
         return NotFound();
+    case ErrorKind::InterruptError:
+        return InterruptError();
     default:
         return ResponseError(string(error.string));
     }
@@ -469,18 +475,30 @@ Result<ConnectionInfo> RoutexClient::info(const string &ticket, ConnectionId con
     }
 }
 
-Result<ServiceResponse> RoutexClient::accounts(const Credentials &credentials, const string &ticket,
-                                               const vector<AccountField> &fields,
-                                               const optional<AccountFilter> &filter,
-                                               const optional<Session> &session,
-                                               const optional<bool> &recurringConsents) const {
-    return service_result(inner->bridge->accounts(
-        credentials.connectionId, to_ptr(credentials.userId), to_ptr(credentials.password),
-        to_ptr(credentials.connectionData), ticket,
-        convert_vec<internal::AccountField>(
-            fields, [](uint8_t field) { return static_cast<internal::AccountField>(field); }),
-        filter ? make_unique<internal::AccountFilter>(std::move(filter->inner->inner)) : nullptr,
-        to_ptr(session), to_tri_bool(recurringConsents)));
+Result<ServiceResponse>
+RoutexClient::accounts(const std::variant<Credentials, ConnectionData> &access,
+                       const string &ticket, const vector<AccountField> &fields,
+                       const optional<AccountFilter> &filter, const optional<Session> &session,
+                       const optional<bool> &recurringConsents) const {
+    auto convertedFields = convert_vec<internal::AccountField>(
+        fields, [](uint8_t field) { return static_cast<internal::AccountField>(field); });
+    auto convertedFilter =
+        filter ? make_unique<internal::AccountFilter>(std::move(filter->inner->inner)) : nullptr;
+
+    return visit(overloaded{[&](const Credentials &credentials) {
+                                return service_result(inner->bridge->accounts(
+                                    credentials.connectionId, to_ptr(credentials.userId),
+                                    to_ptr(credentials.password),
+                                    to_ptr(credentials.connectionData), ticket, convertedFields,
+                                    convertedFilter, to_ptr(session),
+                                    to_tri_bool(recurringConsents)));
+                            },
+                            [&](const ConnectionData &connectionData) {
+                                return service_result(inner->bridge->accounts_without_credentials(
+                                    connectionData, ticket, convertedFields, convertedFilter,
+                                    to_ptr(session)));
+                            }},
+                 access);
 }
 
 Result<ServiceResponse> RoutexClient::respondAccounts(const string &ticket,
@@ -494,15 +512,26 @@ Result<ServiceResponse> RoutexClient::confirmAccounts(const string &ticket,
     return service_result(inner->bridge->confirm_accounts(ticket, context));
 }
 
-Result<ServiceResponse> RoutexClient::balances(const Credentials &credentials, const string &ticket,
-                                               const vector<AccountReference> &accounts,
-                                               const optional<Session> &session,
-                                               const optional<bool> &recurringConsents) const {
-    return service_result(inner->bridge->balances(
-        credentials.connectionId, to_ptr(credentials.userId), to_ptr(credentials.password),
-        to_ptr(credentials.connectionData), ticket,
-        convert_vec<internal::AccountReference>(accounts, convert_account_reference),
-        to_ptr(session), to_tri_bool(recurringConsents)));
+Result<ServiceResponse>
+RoutexClient::balances(const std::variant<Credentials, ConnectionData> &access,
+                       const string &ticket, const vector<AccountReference> &accounts,
+                       const optional<Session> &session,
+                       const optional<bool> &recurringConsents) const {
+    auto convertedAccounts =
+        convert_vec<internal::AccountReference>(accounts, convert_account_reference);
+
+    return visit(overloaded{[&](const Credentials &credentials) {
+                                return service_result(inner->bridge->balances(
+                                    credentials.connectionId, to_ptr(credentials.userId),
+                                    to_ptr(credentials.password),
+                                    to_ptr(credentials.connectionData), ticket, convertedAccounts,
+                                    to_ptr(session), to_tri_bool(recurringConsents)));
+                            },
+                            [&](const ConnectionData &connectionData) {
+                                return service_result(inner->bridge->balances_without_credentials(
+                                    connectionData, ticket, convertedAccounts, to_ptr(session)));
+                            }},
+                 access);
 }
 
 Result<ServiceResponse> RoutexClient::respondBalances(const string &ticket,
@@ -516,14 +545,22 @@ Result<ServiceResponse> RoutexClient::confirmBalances(const string &ticket,
     return service_result(inner->bridge->confirm_balances(ticket, context));
 }
 
-Result<ServiceResponse> RoutexClient::transactions(const Credentials &credentials,
-                                                   const string &ticket,
-                                                   const optional<Session> &session,
-                                                   const optional<bool> &recurringConsents) const {
-    return service_result(inner->bridge->transactions(
-        credentials.connectionId, to_ptr(credentials.userId), to_ptr(credentials.password),
-        to_ptr(credentials.connectionData), ticket, to_ptr(session),
-        to_tri_bool(recurringConsents)));
+Result<ServiceResponse>
+RoutexClient::transactions(const std::variant<Credentials, ConnectionData> &access,
+                           const string &ticket, const optional<Session> &session,
+                           const optional<bool> &recurringConsents) const {
+    return visit(
+        overloaded{[&](const Credentials &credentials) {
+                       return service_result(inner->bridge->transactions(
+                           credentials.connectionId, to_ptr(credentials.userId),
+                           to_ptr(credentials.password), to_ptr(credentials.connectionData), ticket,
+                           to_ptr(session), to_tri_bool(recurringConsents)));
+                   },
+                   [&](const ConnectionData &connectionData) {
+                       return service_result(inner->bridge->transactions_without_credentials(
+                           connectionData, ticket, to_ptr(session)));
+                   }},
+        access);
 }
 
 Result<ServiceResponse> RoutexClient::respondTransactions(const string &ticket,
