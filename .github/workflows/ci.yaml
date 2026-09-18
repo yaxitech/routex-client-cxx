@@ -147,6 +147,12 @@ jobs:
             -I"$GITHUB_WORKSPACE" \
             -Wno-unknown-pragmas
 
+  android:
+    name: Android package
+    uses: ./.github/workflows/android.yaml
+    permissions:
+      contents: read
+
   derive-version:
     name: Derive package version
     runs-on: ubuntu-latest

@@ -1,0 +1,101 @@
+name: Build Android package
+
+on:
+  workflow_call:
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build AAR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Select the toolchain
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME_25_X64" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --no-self-update \
+            --target aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: android
+
+      - name: Document build tools
+        run: |
+          echo "::group::Rust"
+          rustc --version --verbose
+          echo "::endgroup::"
+          echo "::group::NDK"
+          echo "$ANDROID_NDK_ROOT"
+          cat "$ANDROID_NDK_ROOT/source.properties"
+          echo "::endgroup::"
+          echo "::group::Java"
+          "$JAVA_HOME/bin/java" -version
+          echo "::endgroup::"
+
+      - name: Cross-compile the static libraries
+        run: |
+          bin="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do
+            case "$target" in
+              aarch64-linux-android)   abi=arm64-v8a;   prefix=aarch64-linux-android26 ;;
+              armv7-linux-androideabi) abi=armeabi-v7a; prefix=armv7a-linux-androideabi26 ;;
+              x86_64-linux-android)    abi=x86_64;      prefix=x86_64-linux-android26 ;;
+            esac
+            upper=$(echo "$target" | tr 'a-z-' 'A-Z_')
+            export "CC_${target//-/_}=$bin/$prefix-clang"
+            export "CXX_${target//-/_}=$bin/$prefix-clang++"
+            export "AR_${target//-/_}=$bin/llvm-ar"
+            export "CARGO_TARGET_${upper}_LINKER=$bin/$prefix-clang"
+            cargo build --release --locked --target "$target"
+            mkdir -p "target/android-libs/$abi"
+            cp "target/$target/release/libroutex_client_cxx.a" "target/android-libs/$abi/"
+          done
+
+      - name: Build the AAR
+        working-directory: android
+        env:
+          YAXI_LIB_DIR: ${{ github.workspace }}/target/android-libs
+        run: ./gradlew :routex-client:assembleRelease
+
+      - name: Verify the AAR
+        working-directory: android
+        run: ./verify-aar.sh routex-client/build/outputs/aar/routex-client-release.aar
+
+      - name: Link a consumer against the package
+        working-directory: android
+        env:
+          YAXI_LIB_DIR: ${{ github.workspace }}/target/android-libs
+        run: ./gradlew :consumer-test:assembleDebug :consumer-test:assembleDebugAndroidTest
+
+      - name: Check the library reaches the APK
+        working-directory: android
+        run: |
+          apk=consumer-test/build/outputs/apk/debug/consumer-test-debug.apk
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            if ! unzip -l "$apk" | grep -q "lib/$abi/libroutex-client.so"; then
+              echo "::error::libroutex-client.so is missing from the APK for $abi"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aar
+          path: android/routex-client/build/outputs/aar/*.aar
+          if-no-files-found: error
+          retention-days: 30

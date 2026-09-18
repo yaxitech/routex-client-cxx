@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- An Android distribution: an AAR carrying a prefab package with the modules `routex-client` (shared) and `routex-client-static`, for `arm64-v8a`, `armeabi-v7a` and `x86_64`.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added

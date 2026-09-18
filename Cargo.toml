@@ -32,6 +32,7 @@ crate-type = ["staticlib", "cdylib"]
 
 [profile.release]
 codegen-units = 1
+lto = true
 
 [package.metadata.winresource]
 FileDescription = "YAXI Open Banking services client"
