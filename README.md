@@ -2,7 +2,7 @@
 
 C++ client library for [YAXI's](https://yaxi.tech) Open Banking services.
 
-Currently only a Windows distribution is available, shipped as a NuGet package with `x64`, `x86`, and `arm64` runtimes.
+It ships for Windows as a NuGet package with `x64`, `x86`, and `arm64` runtimes, and for Android as an AAR carrying a prefab package (see [`android/`](android/README.md)).
 Service methods are synchronous and return a `yaxi::Result<T>`, a `std::variant<T, yaxi::Error>` where the error alternative is itself a `std::variant` of typed error structs (see [`include/yaxi/routex-client.h`](include/yaxi/routex-client.h)).
 
 See the [documentation](https://docs.yaxi.tech) for the full API reference.
@@ -14,7 +14,7 @@ Requires Windows, MSVC, and C++17 or newer. Available on NuGet as [`routex-clien
 ```xml
 <!-- packages.config -->
 <packages>
-  <package id="routex-client-cxx" version="0.2.0" targetFramework="native" />
+  <package id="routex-client-cxx" version="0.3.0" targetFramework="native" />
 </packages>
 ```
 
@@ -41,8 +41,14 @@ template <typename T> T unwrap(Result<T> r) {
     return std::get<T>(std::move(r));
 }
 
+// The client performs no HTTP itself: supply your application's HTTP stack
+HttpTransport transport = [](const HttpRequest& request) -> HttpResponse {
+    // Send request.method to request.url with request.headers and request.body
+    // and return the status, headers and body. Throw on transport failure.
+};
+
 // Pass "https://integration.yaxi.tech" for the integration environment
-RoutexClient client;
+RoutexClient client(transport);
 
 // ticket: a YAXI service ticket issued by your backend (see docs)
 

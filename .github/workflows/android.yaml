@@ -80,7 +80,7 @@ jobs:
         working-directory: android
         env:
           YAXI_LIB_DIR: ${{ github.workspace }}/target/android-libs
-        run: ./gradlew :consumer-test:assembleDebug :consumer-test:assembleDebugAndroidTest
+        run: ./gradlew :consumer-test:assembleDebug
 
       - name: Check the library reaches the APK
         working-directory: android

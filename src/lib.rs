@@ -1,18 +1,21 @@
 use anyhow::{anyhow, bail};
 use chrono::{TimeZone, Utc};
-use cxx::{CxxString, CxxVector, UniquePtr};
+use cxx::{CxxString, CxxVector, SharedPtr, UniquePtr};
+use http::header::InvalidHeaderValue;
+use http::{Request, StatusCode};
 use paste::paste;
-use reqwest::header::InvalidHeaderValue;
 use routex_client::prelude::*;
-use routex_client_common::with_any_service;
-use tokio::runtime::Runtime;
+use routex_client_common::{Error, HttpClient, Response, with_any_service};
 
 #[cxx::bridge(namespace = "yaxi::internal")]
 mod ffi {
     extern "Rust" {
         type RoutexClient;
 
-        fn new_routex_client(url: &UniquePtr<CxxString>) -> Result<Box<RoutexClient>>;
+        fn new_routex_client(
+            transport: SharedPtr<HttpTransport>,
+            url: &UniquePtr<CxxString>,
+        ) -> Result<Box<RoutexClient>>;
 
         fn system_version(self: &RoutexClient, ticket_id: &CxxString) -> Result<String>;
 
@@ -204,6 +207,40 @@ mod ffi {
             ticket: &CxxString,
             context: &CxxVector<u8>,
         ) -> ServiceResult;
+    }
+
+    #[derive(Debug)]
+    struct RequestHeader {
+        name: String,
+        value: Vec<u8>,
+    }
+
+    #[derive(Debug)]
+    struct ResponseHeader {
+        name: String,
+        value: UniquePtr<CxxVector<u8>>,
+    }
+
+    #[derive(Debug)]
+    struct HttpRequest {
+        method: String,
+        url: String,
+        headers: Vec<RequestHeader>,
+        body: Vec<u8>,
+    }
+
+    #[derive(Debug)]
+    struct HttpResponse {
+        status: u16,
+        headers: Vec<ResponseHeader>,
+        body: UniquePtr<CxxVector<u8>>,
+    }
+
+    unsafe extern "C++" {
+        include!("routex-client-cxx/src/internal.h");
+
+        fn execute_request(transport: &HttpTransport, request: HttpRequest)
+        -> Result<HttpResponse>;
     }
 
     #[derive(Debug)]
@@ -506,6 +543,7 @@ mod ffi {
     #[namespace = "yaxi"]
     unsafe extern "C++" {
         include!("yaxi/routex-client.h");
+        type HttpTransport;
         type AccountStatus;
         type AccountType;
         type ChargeBearer;
@@ -922,12 +960,62 @@ impl From<&ffi::AccountReference> for DebtorAccountReference {
     }
 }
 
-struct RoutexClient {
-    inner: routex_client::RoutexClient<reqwest::Client>,
-    runtime: Runtime,
+#[derive(Clone)]
+struct CxxTransport(SharedPtr<ffi::HttpTransport>);
+
+impl HttpClient for CxxTransport {
+    fn execute(&self, req: Request<Vec<u8>>) -> impl Future<Output = Result<Response, Error>> {
+        std::future::ready((|| {
+            let (parts, body) = req.into_parts();
+            let response = ffi::execute_request(
+                &self.0,
+                ffi::HttpRequest {
+                    method: parts.method.as_str().to_owned(),
+                    url: parts.uri.to_string(),
+                    headers: parts
+                        .headers
+                        .iter()
+                        .map(|(name, value)| ffi::RequestHeader {
+                            name: name.as_str().to_owned(),
+                            value: value.as_bytes().to_vec(),
+                        })
+                        .collect(),
+                    body,
+                },
+            )
+            .map_err(|err| Error::RequestError(anyhow!("{err}")))?;
+
+            Ok(Response {
+                status: StatusCode::from_u16(response.status)
+                    .map_err(|err| Error::RequestError(anyhow!(err)))?,
+                headers: response
+                    .headers
+                    .into_iter()
+                    .filter_map(|ffi::ResponseHeader { name, value }| {
+                        Some((
+                            name.parse().ok()?,
+                            value.as_ref()?.as_slice().try_into().ok()?,
+                        ))
+                    })
+                    .collect(),
+                body: response
+                    .body
+                    .as_ref()
+                    .map_or_else(Vec::new, |body| body.as_slice().to_vec())
+                    .into(),
+            })
+        })())
+    }
 }
 
-fn new_routex_client(url: &UniquePtr<CxxString>) -> anyhow::Result<Box<RoutexClient>> {
+struct RoutexClient {
+    inner: routex_client::RoutexClient<CxxTransport>,
+}
+
+fn new_routex_client(
+    transport: SharedPtr<ffi::HttpTransport>,
+    url: &UniquePtr<CxxString>,
+) -> anyhow::Result<Box<RoutexClient>> {
     Ok(Box::new(RoutexClient {
         inner: routex_client::RoutexClient::for_distribution(
             "C++",
@@ -936,18 +1024,17 @@ fn new_routex_client(url: &UniquePtr<CxxString>) -> anyhow::Result<Box<RoutexCli
                 .map_or("https://api.yaxi.tech/".parse(), |url| {
                     url.to_string().parse()
                 })?,
-            reqwest::Client::new(),
+            CxxTransport(transport),
         ),
-        runtime: Runtime::new()?,
     }))
 }
 
 impl RoutexClient {
     fn system_version(&self, ticket_id: &CxxString) -> anyhow::Result<String> {
-        Ok(self
-            .runtime
-            .block_on(self.inner.system_version(ticket_id.to_string().parse()?))
-            .unwrap_or_default())
+        Ok(
+            futures::executor::block_on(self.inner.system_version(ticket_id.to_string().parse()?))
+                .unwrap_or_default(),
+        )
     }
 
     fn trace_id(&self) -> Vec<u8> {
@@ -958,8 +1045,7 @@ impl RoutexClient {
         let ticket = ticket.to_string();
 
         with_any_service!(ticket, authenticated, {
-            self.runtime
-                .block_on(self.inner.trace(&authenticated, trace_id.as_slice()))
+            futures::executor::block_on(self.inner.trace(&authenticated, trace_id.as_slice()))
         })
         .into()
     }
@@ -981,7 +1067,7 @@ impl RoutexClient {
         let ticket = ticket.to_string();
 
         with_any_service!(ticket, authenticated, {
-            self.runtime.block_on(self.inner.register_redirect_uri(
+            futures::executor::block_on(self.inner.register_redirect_uri(
                 &authenticated,
                 handle.to_string(),
                 redirect_uri.to_string(),
@@ -1030,7 +1116,7 @@ impl RoutexClient {
 
         Ok(
             match with_any_service!(ticket, authenticated, {
-                self.runtime.block_on(
+                futures::executor::block_on(
                     self.inner
                         .search(authenticated, filters)
                         .iban_detection(iban_detection)
@@ -1071,7 +1157,7 @@ impl RoutexClient {
         let ticket = ticket.to_string();
 
         match with_any_service!(ticket, authenticated, {
-            self.runtime.block_on(
+            futures::executor::block_on(
                 self.inner
                     .info(&authenticated, connection_id.to_string().parse()?),
             )
@@ -1124,7 +1210,7 @@ macro_rules! service {
                         request = request.session(session.as_slice().to_vec().into());
                     }
 
-                    Ok(self.runtime.block_on(request.send()).into())
+                    Ok(futures::executor::block_on(request.send()).into())
                 }
             }
         }
@@ -1171,7 +1257,7 @@ macro_rules! service {
                         request = request.session(session.as_slice().to_vec().into());
                     }
 
-                    Ok(self.runtime.block_on(request.send()).into())
+                    Ok(futures::executor::block_on(request.send()).into())
                 }
 
                 fn [<respond_$service>](
@@ -1180,7 +1266,7 @@ macro_rules! service {
                     context: &CxxVector<u8>,
                     response: String,
                 ) -> ffi::ServiceResult {
-                    self.runtime.block_on(
+                    futures::executor::block_on(
                             self.inner.[<respond_$service>](
                                 &match ticket.to_string().parse() {
                                     Ok(ticket) => ticket,
@@ -1197,7 +1283,7 @@ macro_rules! service {
                     ticket: &CxxString,
                     context: &CxxVector<u8>,
                 ) -> ffi::ServiceResult {
-                    self.runtime.block_on(
+                    futures::executor::block_on(
                             self.inner.[<confirm_$service>](
                                 &match ticket.to_string().parse() {
                                     Ok(ticket) => ticket,

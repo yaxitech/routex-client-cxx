@@ -2,6 +2,7 @@
 #include <memory>
 #include <stdexcept>
 
+#include "routex-client-cxx/src/internal.h"
 #include "routex-client-cxx/src/lib.rs.h"
 #include "yaxi/routex-client.h"
 
@@ -35,6 +36,16 @@ inline vector<uint8_t> bytes(rust::Vec<uint8_t> const &bytes) {
 
 inline optional<vector<uint8_t>> optional_bytes(rust::Vec<uint8_t> const &b) {
     return b.empty() ? nullopt : optional(bytes(b));
+}
+
+inline rust::Vec<internal::ResponseHeader> rust_headers(vector<yaxi::HttpHeader> &&in) {
+    rust::Vec<internal::ResponseHeader> out;
+    out.reserve(in.size());
+    for (auto &header : in) {
+        out.push_back(internal::ResponseHeader{
+            rust::String(header.name), make_unique<vector<uint8_t>>(std::move(header.value))});
+    }
+    return out;
 }
 
 inline optional<string> optional_string(rust::String const &str) {
@@ -372,14 +383,55 @@ AccountFilter AccountField::TypeField::operator!=(const optional<AccountType> &v
     });
 }
 
+namespace internal {
+HttpResponse execute_request(const HttpTransport &transport, HttpRequest request) {
+    yaxi::HttpRequest req{
+        string(request.method),
+        string(request.url),
+        convert_vec<yaxi::HttpHeader>(request.headers,
+                                      [](internal::RequestHeader const &header) {
+                                          return yaxi::HttpHeader{string(header.name),
+                                                                  bytes(header.value)};
+                                      }),
+        bytes(request.body),
+    };
+
+    yaxi::HttpResponse resp{};
+    try {
+        resp = transport(req);
+    } catch (const std::exception &) {
+        throw; // surfaced as RequestError by the cxx shim
+    } catch (...) {
+        throw std::runtime_error("HTTP transport threw a non-std::exception");
+    }
+
+    return HttpResponse{
+        resp.status,
+        rust_headers(std::move(resp.headers)),
+        make_unique<vector<uint8_t>>(std::move(resp.body)),
+    };
+}
+} // namespace internal
+
 struct RoutexClient::Inner {
     rust::Box<internal::RoutexClient> bridge;
 
     explicit Inner(rust::Box<internal::RoutexClient> b) : bridge(std::move(b)) {}
 };
 
-RoutexClient::RoutexClient(const optional<string> &url)
-    : inner(make_unique<Inner>(new_routex_client(to_ptr(url)))) {}
+namespace {
+HttpTransport require_transport(HttpTransport transport) {
+    if (!transport) {
+        throw std::invalid_argument("HttpTransport must not be empty");
+    }
+    return transport;
+}
+} // namespace
+
+RoutexClient::RoutexClient(HttpTransport transport, const optional<string> &url)
+    : inner(make_unique<Inner>(new_routex_client(
+          std::make_shared<HttpTransport>(require_transport(std::move(transport))), to_ptr(url)))) {
+}
 
 RoutexClient::~RoutexClient() = default;
 

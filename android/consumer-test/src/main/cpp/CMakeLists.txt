@@ -7,9 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(routex-client REQUIRED CONFIG)
 
-# probe.cpp is the JNI entry point the instrumented test drives; consumer.cpp is
-# the link check, which the static target shares.
-add_library(consumer SHARED consumer.cpp probe.cpp)
+add_library(consumer SHARED consumer.cpp)
 target_link_libraries(consumer PRIVATE routex-client::routex-client)
 
 # The same check against the static module. Nothing but the module differs, so

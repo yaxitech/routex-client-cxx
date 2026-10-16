@@ -50,6 +50,13 @@ class HoldsAlternativeMatcher : public Catch::Matchers::MatcherGenericBase {
 
 template <typename T> HoldsAlternativeMatcher<T> HoldsAlternative() { return {}; }
 
+// A libcurl-backed HttpTransport. Drives the [online] tests and doubles as an
+// example implementation of the yaxi::HttpTransport callback. It creates a fresh
+// handle per request; a production transport should reuse connections, DNS
+// lookups and TLS sessions (one reused easy handle, or a CURLSH share across
+// threads).
+::yaxi::HttpResponse curlHttpClient(const ::yaxi::HttpRequest &request);
+
 // Fixture for [online] tests. The default ctor calls getConfigOrSkip(), so
 // any test using TEST_CASE_METHOD(OnlineFixture, ...) is automatically
 // skipped when YAXI_API_KEY / YAXI_KEY_ID / ROUTEX_URL is unset.
@@ -62,7 +69,8 @@ class OnlineFixture {
     TicketGenerator generator;
 
   private:
-    explicit OnlineFixture(Config cfg) : client(cfg.url), generator(cfg.keyId, cfg.apiKeyBase64) {}
+    explicit OnlineFixture(Config cfg)
+        : client(curlHttpClient, cfg.url), generator(cfg.keyId, cfg.apiKeyBase64) {}
 };
 
 } // namespace yaxi::test

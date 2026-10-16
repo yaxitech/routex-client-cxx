@@ -1,10 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] - unreleased
 
 ### Added
 
+- `HttpTransport`, the callback through which `RoutexClient` sends its HTTP requests, with `HttpRequest`, `HttpResponse` and `HttpHeader`.
 - An Android distribution: an AAR carrying a prefab package with the modules `routex-client` (shared) and `routex-client-static`, for `arm64-v8a`, `armeabi-v7a` and `x86_64`.
+
+### Changed
+
+- **Breaking:** The `RoutexClient` constructor takes an `HttpTransport` as its first argument. The application supplies the HTTP stack.
+
+### Removed
+
+- The bundled HTTP stack (reqwest, hyper, rustls, tokio). The library no longer does any networking or TLS itself.
 
 ## [0.2.0] - 2026-07-31
 

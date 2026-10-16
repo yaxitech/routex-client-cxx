@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -34,6 +35,46 @@ using ConnectionData = std::vector<uint8_t>;
 using Session = std::vector<uint8_t>;
 using InputContext = std::vector<uint8_t>;
 using ConfirmationContext = std::vector<uint8_t>;
+
+/**
+ * A single HTTP header. `value` holds the raw bytes, as header values are not
+ * guaranteed to be valid UTF-8.
+ */
+struct HttpHeader {
+    std::string name;
+    std::vector<uint8_t> value;
+};
+
+/**
+ * An HTTP request to be performed by an `HttpTransport`.
+ */
+struct HttpRequest {
+    std::string method; // "GET" or "POST"
+    std::string url;
+    std::vector<HttpHeader> headers;
+    std::vector<uint8_t> body;
+};
+
+/**
+ * An HTTP response produced by an `HttpTransport`.
+ */
+struct HttpResponse {
+    uint16_t status;
+    std::vector<HttpHeader> headers;
+    std::vector<uint8_t> body;
+};
+
+/**
+ * HTTP transport used by `RoutexClient` to talk to the YAXI service.
+ *
+ * Supply your application's own HTTP stack. The callback is invoked
+ * synchronously on the calling thread and is expected to block until the
+ * response is available. Throw any `std::exception` on a transport failure — it
+ * surfaces as a `RequestError` from the `RoutexClient` method that triggered it.
+ *
+ * The transport must not call into the `RoutexClient` that invoked it.
+ */
+using HttpTransport = std::function<HttpResponse(const HttpRequest &request)>;
 
 class YAXI_API RequestError : public std::runtime_error {
   public:
@@ -820,9 +861,13 @@ struct TransferDetails {
 class [[nodiscard]] YAXI_API RoutexClient final {
   public:
     /**
-     * Create a new client, optionally providing a custom URL.
+     * Create a new client backed by the given HTTP transport, optionally
+     * providing a custom URL.
+     *
+     * Throws `std::invalid_argument` if the transport is empty.
      */
-    explicit RoutexClient(const std::optional<std::string> &url = std::nullopt);
+    explicit RoutexClient(HttpTransport transport,
+                          const std::optional<std::string> &url = std::nullopt);
 
     ~RoutexClient();
 

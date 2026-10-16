@@ -30,19 +30,12 @@ boundary, so both sides need the same standard library.
 
 Two modules sit over the same headers, `routex-client` (shared) and
 `routex-client-static`. Link one or the other; neither needs anything added to the
-link line. The static module folds the client into your own library and the linker
-drops what you do not call — 6.9 MB inside your library against 7.7 MB beside it
-on arm64-v8a.
+link line.
 
 ABIs are `arm64-v8a`, `armeabi-v7a` and `x86_64`, built against API 26. Consumers
 building an ABI the package does not carry fail to configure, so set `abiFilters`
 accordingly.
 
-The client still brings its own HTTP stack (reqwest with rustls), whose platform
-verifier needs a JNI handshake on Android that nothing here performs yet — expect
-certificate verification to fail at runtime until that changes. `:consumer-test`
-carries an instrumented test that demonstrates it. Nothing about the packaging
-changes when it is fixed.
 
 ## Building
 

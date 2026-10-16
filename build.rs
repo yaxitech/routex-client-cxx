@@ -12,6 +12,7 @@ fn main() {
     build.compile("routex-client");
 
     println!("cargo:rerun-if-changed=src/lib.cc");
+    println!("cargo:rerun-if-changed=src/internal.h");
     println!("cargo:rerun-if-changed=include/yaxi/routex-client.h");
 }
 
