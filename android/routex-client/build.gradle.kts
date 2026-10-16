@@ -1,5 +1,6 @@
 import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
 import org.gradle.plugins.signing.Sign
+import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
 plugins {
@@ -188,6 +189,21 @@ abstract class SignAar : DefaultTask() {
                 add(alias.get())
             }
         execOperations.exec { commandLine(arguments) }
+
+        // jarsigner exits 0 on an unsigned archive, so read its (localized) verdict.
+        val verification = ByteArrayOutputStream()
+        execOperations.exec {
+            commandLine(
+                jarsigner.absolutePath,
+                "-J-Duser.language=en",
+                "-verify",
+                aar.get().asFile.absolutePath,
+            )
+            standardOutput = verification
+        }
+        if (!verification.toString().contains("jar verified.")) {
+            throw GradleException("The signed AAR does not verify:\n$verification")
+        }
     }
 }
 

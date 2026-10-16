@@ -1,8 +1,12 @@
-# Build, verify and publish the routex-client-cxx NuGet package.
+# Build, verify and publish the routex-client-cxx NuGet and Android packages.
 #
 # Stable tags (no '-' in the version) publish to nuget.org;
 # prerelease tags (containing '-', e.g. v1.2.3-rc.1) publish to the
 # int.nugettest.org integration instance instead.
+#
+# The Android package goes to Maven Central under the version in Cargo.toml,
+# which has to match the tag. Central has no test instance, so prerelease tags
+# upload a deployment without releasing it; drop it in the Central Portal.
 #
 # Publishing uses Trusted Publishing (OIDC) — no API key is stored as a
 # secret. A matching policy must exist on each target registry pointing at:
@@ -10,7 +14,7 @@
 #   - Workflow file: publish.yaml
 #   - Environment: release
 # See https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing.
-name: Publish NuGet package
+name: Publish packages
 
 on:
   release:
@@ -173,3 +177,67 @@ jobs:
               --api-key $env:NUGET_API_KEY `
               --source $env:NUGET_SOURCE `
               --skip-duplicate
+
+  android:
+    name: Android
+    uses: ./.github/workflows/android.yaml
+    permissions:
+      contents: read
+
+  publish-android:
+    name: Publish to Maven Central
+    needs: [derive-version, android, test, unit-tests]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check the crate version matches the tag
+        env:
+          VERSION: ${{ needs.derive-version.outputs.version }}
+        run: |
+          crate=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "routex-client-cxx") | .version')
+          if [ "$crate" != "$VERSION" ]; then
+            echo "::error::Cargo.toml says $crate, the tag says $VERSION"
+            exit 1
+          fi
+
+      - name: Select the toolchain
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME_25_X64" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: android-libs
+          path: target/android-libs
+
+      - name: Write the keystore
+        env:
+          JAR_SIGNING_KEYSTORE: ${{ secrets.JAR_SIGNING_KEYSTORE }}
+        run: |
+          umask 077
+          echo "$JAR_SIGNING_KEYSTORE" | base64 -d > "$RUNNER_TEMP/yaxi.p12"
+
+      - name: Publish
+        working-directory: android
+        env:
+          YAXI_LIB_DIR: ${{ github.workspace }}/target/android-libs
+          YAXI_SIGNING_STOREPASS: ${{ secrets.JAR_SIGNING_STOREPASS }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: FFE12EA5
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_IN_MEMORY_PASSWORD }}
+          TASK: ${{ needs.derive-version.outputs.is-prerelease == 'true' && 'publishToMavenCentral' || 'publishAndReleaseToMavenCentral' }}
+        run: |
+          ./gradlew -Prelease \
+            "-Pyaxi.signing.keystore=$RUNNER_TEMP/yaxi.p12" \
+            -Pyaxi.signing.tsa=http://timestamp.digicert.com \
+            ":routex-client:$TASK"
+
