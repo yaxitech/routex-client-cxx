@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace yaxi::test {
 namespace {
@@ -112,4 +113,86 @@ std::vector<uint8_t> base64Decode(const std::string &input) {
     return std::vector<uint8_t>(s.begin(), s.end());
 }
 
+namespace {
+size_t appendBody(char *ptr, size_t size, size_t nmemb, void *userdata) {
+    auto *body = static_cast<std::vector<uint8_t> *>(userdata);
+    size_t n = size * nmemb;
+    body->insert(body->end(), ptr, ptr + n);
+    return n;
+}
+
+void appendRequestHeader(curl_slist *&list, const std::string &line) {
+    curl_slist *appended = curl_slist_append(list, line.c_str());
+    if (!appended) {
+        curl_slist_free_all(list);
+        throw std::runtime_error("curl_slist_append failed");
+    }
+    list = appended;
+}
+} // namespace
+
+yaxi::HttpResponse curlHttpClient(const yaxi::HttpRequest &request) {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        throw std::runtime_error("curl_easy_init failed");
+    }
+    auto guard = std::unique_ptr<CURL, void (*)(CURL *)>(curl, curl_easy_cleanup);
+
+    curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10'000L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 120'000L);
+
+    curl_slist *headerList = nullptr;
+    // Suppress libcurl's implicit "Expect: 100-continue" on large bodies.
+    appendRequestHeader(headerList, "Expect:");
+    for (auto const &header : request.headers) {
+        // "Name:" would remove the header; "Name;" sends it with an empty value.
+        std::string line =
+            header.value.empty()
+                ? header.name + ";"
+                : header.name + ": " + std::string(header.value.begin(), header.value.end());
+        appendRequestHeader(headerList, line);
+    }
+    auto headerGuard =
+        std::unique_ptr<curl_slist, void (*)(curl_slist *)>(headerList, curl_slist_free_all);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
+
+    if (request.method != "GET") {
+        // POSTFIELDS implies POST; CUSTOMREQUEST overrides the verb for other
+        // methods. Either way the body is sent.
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS,
+                         reinterpret_cast<const char *>(request.body.data()));
+        if (request.method != "POST") {
+            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, request.method.c_str());
+        }
+    }
+
+    std::vector<uint8_t> body;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, appendBody);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+
+    if (auto rc = curl_easy_perform(curl); rc != CURLE_OK) {
+        throw std::runtime_error(std::string("curl_easy_perform: ") + curl_easy_strerror(rc));
+    }
+
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+
+    // Headers of the final response only: no 1xx blocks, no trailers.
+    std::vector<yaxi::HttpHeader> headers;
+    curl_header *prev = nullptr;
+    while (curl_header *h = curl_easy_nextheader(curl, CURLH_HEADER, -1, prev)) {
+        std::string value(h->value);
+        headers.push_back(
+            yaxi::HttpHeader{h->name, std::vector<uint8_t>(value.begin(), value.end())});
+        prev = h;
+    }
+
+    return yaxi::HttpResponse{
+        static_cast<uint16_t>(status),
+        std::move(headers),
+        std::move(body),
+    };
+}
 } // namespace yaxi::test

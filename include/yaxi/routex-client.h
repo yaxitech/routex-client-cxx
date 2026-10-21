@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -34,6 +35,46 @@ using ConnectionData = std::vector<uint8_t>;
 using Session = std::vector<uint8_t>;
 using InputContext = std::vector<uint8_t>;
 using ConfirmationContext = std::vector<uint8_t>;
+
+/**
+ * A single HTTP header. `value` holds the raw bytes, as header values are not
+ * guaranteed to be valid UTF-8.
+ */
+struct HttpHeader {
+    std::string name;
+    std::vector<uint8_t> value;
+};
+
+/**
+ * An HTTP request to be performed by an `HttpTransport`.
+ */
+struct HttpRequest {
+    std::string method; // "GET" or "POST"
+    std::string url;
+    std::vector<HttpHeader> headers;
+    std::vector<uint8_t> body;
+};
+
+/**
+ * An HTTP response produced by an `HttpTransport`.
+ */
+struct HttpResponse {
+    uint16_t status;
+    std::vector<HttpHeader> headers;
+    std::vector<uint8_t> body;
+};
+
+/**
+ * HTTP transport used by `RoutexClient` to talk to the YAXI service.
+ *
+ * Supply your application's own HTTP stack. The callback is invoked
+ * synchronously on the calling thread and is expected to block until the
+ * response is available. Throw any `std::exception` on a transport failure — it
+ * surfaces as a `RequestError` from the `RoutexClient` method that triggered it.
+ *
+ * The transport must not call into the `RoutexClient` that invoked it.
+ */
+using HttpTransport = std::function<HttpResponse(const HttpRequest &request)>;
 
 class YAXI_API RequestError : public std::runtime_error {
   public:
@@ -744,10 +785,30 @@ class YAXI_API AccountField::TypeField : public AccountField {
     AccountFilter operator!=(const std::optional<AccountType> &val) const;
 };
 
-struct AccountReference {
+/**
+ * Reference to an account by its ISO 20022 IBAN2007Identifier, with an optional ISO 4217 currency
+ * code for multi-currency accounts.
+ */
+struct IbanAccountReference {
     std::string iban;
-    std::optional<std::string> currency;
+    std::optional<std::string> currency = std::nullopt;
 };
+
+/**
+ * Reference to an account by an account number that is not an IBAN, e.g. ISO 20022
+ * BBANIdentifier, with an optional ISO 4217 currency code for multi-currency accounts.
+ */
+struct NumberAccountReference {
+    std::string number;
+    std::optional<std::string> currency = std::nullopt;
+};
+
+using AccountReference = std::variant<IbanAccountReference, NumberAccountReference>;
+
+/**
+ * Reference to a debtor account for payments.
+ */
+using DebtorAccountReference = std::variant<IbanAccountReference>;
 
 enum class PaymentProduct : uint8_t {
     /**
@@ -820,9 +881,13 @@ struct TransferDetails {
 class [[nodiscard]] YAXI_API RoutexClient final {
   public:
     /**
-     * Create a new client, optionally providing a custom URL.
+     * Create a new client backed by the given HTTP transport, optionally
+     * providing a custom URL.
+     *
+     * Throws `std::invalid_argument` if the transport is empty or the URL is invalid.
      */
-    explicit RoutexClient(const std::optional<std::string> &url = std::nullopt);
+    explicit RoutexClient(HttpTransport transport,
+                          const std::optional<std::string> &url = std::nullopt);
 
     ~RoutexClient();
 
@@ -832,6 +897,11 @@ class [[nodiscard]] YAXI_API RoutexClient final {
     RoutexClient(RoutexClient &&) noexcept;
     RoutexClient &operator=(RoutexClient &&) noexcept;
 
+    /**
+     * System version for the currently established session.
+     *
+     * Returns `std::nullopt` if it is unknown or `ticketId` is not a valid ticket ID.
+     */
     [[nodiscard]] std::optional<std::string> systemVersion(const std::string &ticketId) const;
 
     /**
@@ -852,6 +922,8 @@ class [[nodiscard]] YAXI_API RoutexClient final {
      * It can be used to redirect back to a web application or to jump
      * back into the context of a desktop or mobile application.
      * If no redirect URI is set, `RedirectHandle`s will get returned instead of `Redirect`s.
+     *
+     * Throws `std::invalid_argument` if the redirect URI is invalid.
      */
     void setRedirectUri(const std::string &redirectUri);
 
@@ -965,7 +1037,7 @@ class [[nodiscard]] YAXI_API RoutexClient final {
      */
     [[nodiscard]] Result<ServiceResponse>
     collectPayment(const Credentials &credentials, const std::string &ticket,
-                   const std::optional<AccountReference> &account = std::nullopt,
+                   const std::optional<DebtorAccountReference> &account = std::nullopt,
                    const std::optional<Session> &session = std::nullopt,
                    const std::optional<bool> &recurringConsents = std::nullopt) const;
 
@@ -991,7 +1063,7 @@ class [[nodiscard]] YAXI_API RoutexClient final {
     [[nodiscard]] Result<ServiceResponse>
     transfer(const Credentials &credentials, const std::string &ticket,
              const PaymentProduct &product, const std::vector<TransferDetails> &details,
-             const std::optional<AccountReference> &debtorAccount = std::nullopt,
+             const std::optional<DebtorAccountReference> &debtorAccount = std::nullopt,
              const std::optional<std::string> &debtorName = std::nullopt,
              const std::optional<std::chrono::time_point<std::chrono::system_clock>>
                  &requestedExecutionDate = std::nullopt,

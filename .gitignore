@@ -8,6 +8,10 @@ result
 
 /tests/unit/build/
 
+/android/**/build/
+/android/**/.cxx/
+/android/.gradle/
+
 /.nuget-local
 /nuget-pkg
 *.nupkg

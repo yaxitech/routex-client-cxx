@@ -2,6 +2,7 @@
 #include <memory>
 #include <stdexcept>
 
+#include "routex-client-cxx/src/internal.h"
 #include "routex-client-cxx/src/lib.rs.h"
 #include "yaxi/routex-client.h"
 
@@ -18,10 +19,6 @@ inline TriBool to_tri_bool(optional<bool> opt) {
     return opt ? opt.value() ? TriBool::True : TriBool::False : TriBool::None;
 }
 
-yaxi::internal::AccountReference convert_account_reference(yaxi::AccountReference ref) {
-    return {ref.iban, to_ptr(ref.currency)};
-}
-
 template <typename U, typename T, typename F> vector<U> convert_vec(T const &in, F f) {
     vector<U> out;
     out.reserve(in.size());
@@ -35,6 +32,16 @@ inline vector<uint8_t> bytes(rust::Vec<uint8_t> const &bytes) {
 
 inline optional<vector<uint8_t>> optional_bytes(rust::Vec<uint8_t> const &b) {
     return b.empty() ? nullopt : optional(bytes(b));
+}
+
+inline rust::Vec<internal::ResponseHeader> rust_headers(vector<yaxi::HttpHeader> &&in) {
+    rust::Vec<internal::ResponseHeader> out;
+    out.reserve(in.size());
+    for (auto &header : in) {
+        out.push_back(internal::ResponseHeader{
+            rust::String(header.name), make_unique<vector<uint8_t>>(std::move(header.value))});
+    }
+    return out;
 }
 
 inline optional<string> optional_string(rust::String const &str) {
@@ -190,6 +197,26 @@ template <typename... Ts> struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template <typename... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+internal::AccountReference convert_account_reference(const AccountReference &ref) {
+    return visit(overloaded{[](const IbanAccountReference &r) {
+                                return internal::AccountReference{make_unique<string>(r.iban),
+                                                                  nullptr, to_ptr(r.currency)};
+                            },
+                            [](const NumberAccountReference &r) {
+                                return internal::AccountReference{
+                                    nullptr, make_unique<string>(r.number), to_ptr(r.currency)};
+                            }},
+                 ref);
+}
+
+internal::DebtorAccountReference
+convert_debtor_account_reference(const DebtorAccountReference &ref) {
+    return visit(overloaded{[](const IbanAccountReference &r) {
+                     return internal::DebtorAccountReference{r.iban, to_ptr(r.currency)};
+                 }},
+                 ref);
+}
 } // namespace
 
 const AccountField::OptionalStringField AccountField::Iban{uint8_t(internal::AccountField::Iban)};
@@ -372,14 +399,68 @@ AccountFilter AccountField::TypeField::operator!=(const optional<AccountType> &v
     });
 }
 
+namespace internal {
+HttpResponse execute_request(const HttpTransport &transport, HttpRequest request) {
+    yaxi::HttpRequest req{
+        string(request.method),
+        string(request.url),
+        convert_vec<yaxi::HttpHeader>(request.headers,
+                                      [](internal::RequestHeader const &header) {
+                                          return yaxi::HttpHeader{string(header.name),
+                                                                  bytes(header.value)};
+                                      }),
+        bytes(request.body),
+    };
+
+    yaxi::HttpResponse resp{};
+    try {
+        resp = transport(req);
+    } catch (const std::exception &) {
+        throw; // surfaced as RequestError by the cxx shim
+    } catch (...) {
+        throw std::runtime_error("HTTP transport threw a non-std::exception");
+    }
+
+    return HttpResponse{
+        resp.status,
+        rust_headers(std::move(resp.headers)),
+        make_unique<vector<uint8_t>>(std::move(resp.body)),
+    };
+}
+} // namespace internal
+
 struct RoutexClient::Inner {
     rust::Box<internal::RoutexClient> bridge;
 
     explicit Inner(rust::Box<internal::RoutexClient> b) : bridge(std::move(b)) {}
 };
 
-RoutexClient::RoutexClient(const optional<string> &url)
-    : inner(make_unique<Inner>(new_routex_client(to_ptr(url)))) {}
+namespace {
+HttpTransport require_transport(HttpTransport transport) {
+    if (!transport) {
+        throw std::invalid_argument("HttpTransport must not be empty");
+    }
+    return transport;
+}
+
+// Throws `std::invalid_argument` with the reason from the Rust side, unless it is empty.
+void require_valid(const rust::String &error) {
+    if (!error.empty()) {
+        throw std::invalid_argument(string(error));
+    }
+}
+
+unique_ptr<string> require_valid_url(const optional<string> &url) {
+    auto ptr = to_ptr(url);
+    require_valid(validate_url(ptr));
+    return ptr;
+}
+} // namespace
+
+RoutexClient::RoutexClient(HttpTransport transport, const optional<string> &url)
+    : inner(make_unique<Inner>(new_routex_client(
+          std::make_shared<HttpTransport>(require_transport(std::move(transport))),
+          require_valid_url(url)))) {}
 
 RoutexClient::~RoutexClient() = default;
 
@@ -402,7 +483,7 @@ Result<string> RoutexClient::trace(const string &ticket, const TraceId &traceId)
 }
 
 void RoutexClient::setRedirectUri(const string &redirectUri) {
-    inner->bridge->set_redirect_uri(redirectUri);
+    require_valid(inner->bridge->set_redirect_uri(redirectUri));
 }
 
 void RoutexClient::setRecurringConsents(bool enabled) {
@@ -574,13 +655,16 @@ RoutexClient::confirmTransactions(const string &ticket, const ConfirmationContex
     return service_result(inner->bridge->confirm_transactions(ticket, context));
 }
 
-Result<ServiceResponse> RoutexClient::collectPayment(
-    const Credentials &credentials, const string &ticket, const optional<AccountReference> &account,
-    const optional<Session> &session, const optional<bool> &recurringConsents) const {
+Result<ServiceResponse>
+RoutexClient::collectPayment(const Credentials &credentials, const string &ticket,
+                             const optional<DebtorAccountReference> &account,
+                             const optional<Session> &session,
+                             const optional<bool> &recurringConsents) const {
     return service_result(inner->bridge->collect_payment(
         credentials.connectionId, to_ptr(credentials.userId), to_ptr(credentials.password),
         to_ptr(credentials.connectionData), ticket,
-        account ? make_unique<internal::AccountReference>(convert_account_reference(*account))
+        account ? make_unique<internal::DebtorAccountReference>(
+                      convert_debtor_account_reference(*account))
                 : nullptr,
         to_ptr(session), to_tri_bool(recurringConsents)));
 }
@@ -599,7 +683,7 @@ RoutexClient::confirmCollectPayment(const string &ticket,
 
 Result<ServiceResponse> RoutexClient::transfer(
     const Credentials &credentials, const string &ticket, const PaymentProduct &product,
-    const vector<TransferDetails> &details, const optional<AccountReference> &debtorAccount,
+    const vector<TransferDetails> &details, const optional<DebtorAccountReference> &debtorAccount,
     const optional<string> &debtorName,
     const optional<chrono::time_point<chrono::system_clock>> &requestedExecutionDate,
     const optional<Session> &session, const optional<bool> &recurringConsents) const {
@@ -624,9 +708,9 @@ Result<ServiceResponse> RoutexClient::transfer(
                     to_ptr(details.chargeBearer),
                 };
             }),
-        debtorAccount
-            ? make_unique<internal::AccountReference>(convert_account_reference(*debtorAccount))
-            : nullptr,
+        debtorAccount ? make_unique<internal::DebtorAccountReference>(
+                            convert_debtor_account_reference(*debtorAccount))
+                      : nullptr,
         to_ptr(debtorName),
         requestedExecutionDate
             ? make_unique<I64>(I64{chrono::duration_cast<chrono::seconds>(

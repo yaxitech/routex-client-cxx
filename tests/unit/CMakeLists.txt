@@ -113,11 +113,12 @@ set(NAMEOF_OPT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(NAMEOF_OPT_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(NAMEOF_OPT_INSTALL        OFF CACHE BOOL "" FORCE)
 
-FetchContent_Declare(curl
+FetchContent_Declare(CURL
     GIT_REPOSITORY https://github.com/curl/curl.git
     GIT_TAG curl-8_20_0
     GIT_SHALLOW TRUE
     SYSTEM
+    FIND_PACKAGE_ARGS
 )
 set(BUILD_CURL_EXE     OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS  OFF CACHE BOOL "" FORCE)
@@ -135,7 +136,7 @@ else()
     set(CURL_USE_OPENSSL  ON  CACHE BOOL "" FORCE)
 endif()
 
-FetchContent_MakeAvailable(Catch2 nlohmann_json jwt_cpp nameof curl)
+FetchContent_MakeAvailable(Catch2 nlohmann_json jwt_cpp nameof CURL)
 list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 
 enable_testing()
@@ -254,7 +255,7 @@ endif()
 set_target_properties(YAXI::Client PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${YAXI_INCLUDE_DIR}")
 
-# System deps pulled in by the Rust crate (reqwest/rustls/tokio).
+# System libraries the Rust static lib links against (platform-dependent).
 target_link_libraries(YAXI::Client INTERFACE
     "$<$<PLATFORM_ID:Windows>:ws2_32;userenv;bcrypt;advapi32;ntdll>"
     "$<$<NOT:$<PLATFORM_ID:Windows>>:pthread;dl;m>"
@@ -266,6 +267,7 @@ add_executable(yaxi_unit_tests
     test_main.cpp
     test_account_filter.cpp
     test_client_online.cpp
+    test_invalid_input.cpp
     helpers.cpp
     ticket.cpp
 )

@@ -98,8 +98,7 @@ TEST_CASE_METHOD(OnlineFixture, "Service CollectPayment", "[online][collect_paym
     payCreds.connectionId = DEMO_CONNECTION_ID;
     payCreds.userId = "confirmation";
     payCreds.connectionData = accountsServiceResult.connectionData;
-    AccountReference account{};
-    account.iban = selectedAccount;
+    IbanAccountReference account{selectedAccount};
 
     auto payResult =
         client.collectPayment(payCreds, paymentTicket, account, accountsServiceResult.session);
@@ -129,8 +128,7 @@ TEST_CASE_METHOD(OnlineFixture, "Service CollectPayment with debtor identificati
     Credentials creds{};
     creds.connectionId = DEMO_CONNECTION_ID;
     creds.userId = "result";
-    AccountReference account{};
-    account.iban = "DE02120300000000202051";
+    IbanAccountReference account{"DE02120300000000202051"};
     auto result = client.collectPayment(creds, paymentTicket, account);
 
     auto &sr = requireServiceResult(result);
@@ -177,7 +175,7 @@ TEST_CASE_METHOD(OnlineFixture, "Service Balances", "[online][balances]") {
     creds.connectionId = DEMO_CONNECTION_ID;
     creds.userId = "confirmation";
     std::vector<AccountReference> accounts{
-        AccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}},
+        IbanAccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}},
     };
 
     auto result = client.balances(creds, balancesTicket, accounts);
@@ -355,7 +353,7 @@ TEST_CASE_METHOD(OnlineFixture, "Services without credentials", "[online][withou
 
     auto balancesTicket = generator.issue(uuidV4(), "Balances");
     std::vector<AccountReference> accounts{
-        AccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}},
+        IbanAccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}},
     };
     auto balancesResult = client.balances(connectionData, balancesTicket, accounts);
     auto &balancesSr = requireServiceResult(balancesResult);

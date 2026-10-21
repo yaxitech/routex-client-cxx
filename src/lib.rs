@@ -1,27 +1,31 @@
 use anyhow::{anyhow, bail};
 use chrono::{TimeZone, Utc};
-use cxx::{CxxString, CxxVector, UniquePtr};
+use cxx::{CxxString, CxxVector, SharedPtr, UniquePtr};
+use http::{Request, StatusCode};
 use paste::paste;
-use reqwest::header::InvalidHeaderValue;
 use routex_client::prelude::*;
-use routex_client_common::with_any_service;
-use tokio::runtime::Runtime;
+use routex_client_common::{Error, HttpClient, Response, with_any_service};
 
 #[cxx::bridge(namespace = "yaxi::internal")]
 mod ffi {
     extern "Rust" {
         type RoutexClient;
 
-        fn new_routex_client(url: &UniquePtr<CxxString>) -> Result<Box<RoutexClient>>;
+        fn new_routex_client(
+            transport: SharedPtr<HttpTransport>,
+            url: &UniquePtr<CxxString>,
+        ) -> Result<Box<RoutexClient>>;
 
-        fn system_version(self: &RoutexClient, ticket_id: &CxxString) -> Result<String>;
+        fn validate_url(url: &UniquePtr<CxxString>) -> String;
+
+        fn system_version(self: &RoutexClient, ticket_id: &CxxString) -> String;
 
         fn trace_id(self: &RoutexClient) -> Vec<u8>;
 
         fn trace(self: &RoutexClient, ticket: &CxxString, trace_id: &CxxVector<u8>)
         -> StringResult;
 
-        fn set_redirect_uri(self: &mut RoutexClient, redirect_uri: &CxxString) -> Result<()>;
+        fn set_redirect_uri(self: &mut RoutexClient, redirect_uri: &CxxString) -> String;
 
         fn set_recurring_consents(self: &mut RoutexClient, enabled: bool);
 
@@ -41,11 +45,7 @@ mod ffi {
             details: &CxxVector<Details>,
         ) -> Result<SearchResult>;
 
-        fn info(
-            self: &RoutexClient,
-            ticket: &CxxString,
-            connection_id: &CxxString,
-        ) -> Result<InfoResult>;
+        fn info(self: &RoutexClient, ticket: &CxxString, connection_id: &CxxString) -> InfoResult;
 
         #[allow(clippy::too_many_arguments)]
         fn accounts(
@@ -157,7 +157,7 @@ mod ffi {
             password: &UniquePtr<CxxString>,
             connection_data: &UniquePtr<CxxVector<u8>>,
             ticket: &CxxString,
-            account: &UniquePtr<AccountReference>,
+            account: &UniquePtr<DebtorAccountReference>,
             session: &UniquePtr<CxxVector<u8>>,
             recurring_consents: TriBool,
         ) -> Result<ServiceResult>;
@@ -185,7 +185,7 @@ mod ffi {
             ticket: &CxxString,
             product: PaymentProduct,
             details: &CxxVector<TransferDetails>,
-            debtor_account: &UniquePtr<AccountReference>,
+            debtor_account: &UniquePtr<DebtorAccountReference>,
             debtor_name: &UniquePtr<CxxString>,
             requested_execution_date: &UniquePtr<I64>,
             session: &UniquePtr<CxxVector<u8>>,
@@ -204,6 +204,40 @@ mod ffi {
             ticket: &CxxString,
             context: &CxxVector<u8>,
         ) -> ServiceResult;
+    }
+
+    #[derive(Debug)]
+    struct RequestHeader {
+        name: String,
+        value: Vec<u8>,
+    }
+
+    #[derive(Debug)]
+    struct ResponseHeader {
+        name: String,
+        value: UniquePtr<CxxVector<u8>>,
+    }
+
+    #[derive(Debug)]
+    struct HttpRequest {
+        method: String,
+        url: String,
+        headers: Vec<RequestHeader>,
+        body: Vec<u8>,
+    }
+
+    #[derive(Debug)]
+    struct HttpResponse {
+        status: u16,
+        headers: Vec<ResponseHeader>,
+        body: UniquePtr<CxxVector<u8>>,
+    }
+
+    unsafe extern "C++" {
+        include!("routex-client-cxx/src/internal.h");
+
+        fn execute_request(transport: &HttpTransport, request: HttpRequest)
+        -> Result<HttpResponse>;
     }
 
     #[derive(Debug)]
@@ -467,6 +501,13 @@ mod ffi {
 
     #[derive(Debug)]
     struct AccountReference {
+        iban: UniquePtr<CxxString>,
+        number: UniquePtr<CxxString>,
+        currency: UniquePtr<CxxString>,
+    }
+
+    #[derive(Debug)]
+    struct DebtorAccountReference {
         iban: String,
         currency: UniquePtr<CxxString>,
     }
@@ -506,6 +547,7 @@ mod ffi {
     #[namespace = "yaxi"]
     unsafe extern "C++" {
         include!("yaxi/routex-client.h");
+        type HttpTransport;
         type AccountStatus;
         type AccountType;
         type ChargeBearer;
@@ -608,6 +650,22 @@ impl From<jsonwebtoken::errors::Error> for ffi::Error {
             }),
         }
     }
+}
+
+fn unexpected_value(string: String) -> ffi::Error {
+    ffi::Error {
+        kind: ffi::ErrorKind::UnexpectedValue,
+        string,
+        code: UniquePtr::null(),
+    }
+}
+
+fn parse_connection_id(connection_id: &CxxString) -> Result<ConnectionId, ffi::Error> {
+    let connection_id = connection_id.to_string();
+
+    connection_id
+        .parse()
+        .map_err(|err| unexpected_value(format!("Invalid connection ID `{connection_id}`: {err}")))
 }
 
 impl From<ffi::TriBool> for Option<bool> {
@@ -904,17 +962,29 @@ account_fields! {
     })) }
 }
 
-impl From<&ffi::AccountReference> for AccountReference {
-    fn from(account: &ffi::AccountReference) -> Self {
-        AccountReference {
-            id: AccountIdentifier::Iban(account.iban.clone()),
+impl TryFrom<&ffi::AccountReference> for AccountReference {
+    type Error = anyhow::Error;
+
+    fn try_from(account: &ffi::AccountReference) -> anyhow::Result<Self> {
+        Ok(AccountReference {
+            id: if let Some(iban) = account.iban.as_ref() {
+                AccountIdentifier::Iban(iban.to_string())
+            } else {
+                AccountIdentifier::Number(
+                    account
+                        .number
+                        .as_ref()
+                        .ok_or(anyhow!("Invalid account reference"))?
+                        .to_string(),
+                )
+            },
             currency: account.currency.as_ref().map(CxxString::to_string),
-        }
+        })
     }
 }
 
-impl From<&ffi::AccountReference> for DebtorAccountReference {
-    fn from(account: &ffi::AccountReference) -> Self {
+impl From<&ffi::DebtorAccountReference> for DebtorAccountReference {
+    fn from(account: &ffi::DebtorAccountReference) -> Self {
         DebtorAccountReference {
             id: DebtorAccountIdentifier::Iban(account.iban.clone()),
             currency: account.currency.as_ref().map(CxxString::to_string),
@@ -922,32 +992,95 @@ impl From<&ffi::AccountReference> for DebtorAccountReference {
     }
 }
 
-struct RoutexClient {
-    inner: routex_client::RoutexClient<reqwest::Client>,
-    runtime: Runtime,
+#[derive(Clone)]
+struct CxxTransport(SharedPtr<ffi::HttpTransport>);
+
+impl HttpClient for CxxTransport {
+    fn execute(&self, req: Request<Vec<u8>>) -> impl Future<Output = Result<Response, Error>> {
+        std::future::ready((|| {
+            let (parts, body) = req.into_parts();
+            let response = ffi::execute_request(
+                &self.0,
+                ffi::HttpRequest {
+                    method: parts.method.as_str().to_owned(),
+                    url: parts.uri.to_string(),
+                    headers: parts
+                        .headers
+                        .iter()
+                        .map(|(name, value)| ffi::RequestHeader {
+                            name: name.as_str().to_owned(),
+                            value: value.as_bytes().to_vec(),
+                        })
+                        .collect(),
+                    body,
+                },
+            )
+            .map_err(|err| Error::RequestError(anyhow!("{err}")))?;
+
+            Ok(Response {
+                status: StatusCode::from_u16(response.status)
+                    .map_err(|err| Error::RequestError(anyhow!(err)))?,
+                headers: response
+                    .headers
+                    .into_iter()
+                    .filter_map(|ffi::ResponseHeader { name, value }| {
+                        Some((
+                            name.parse().ok()?,
+                            value.as_ref()?.as_slice().try_into().ok()?,
+                        ))
+                    })
+                    .collect(),
+                body: response
+                    .body
+                    .as_ref()
+                    .map_or_else(Vec::new, |body| body.as_slice().to_vec())
+                    .into(),
+            })
+        })())
+    }
 }
 
-fn new_routex_client(url: &UniquePtr<CxxString>) -> anyhow::Result<Box<RoutexClient>> {
+struct RoutexClient {
+    inner: routex_client::RoutexClient<CxxTransport>,
+}
+
+/// Parses the client URL, defaulting to the production environment. The error describes the invalid URL.
+fn parse_url(url: &UniquePtr<CxxString>) -> Result<Url, String> {
+    let url = url.as_ref().map_or_else(
+        || "https://api.yaxi.tech/".to_string(),
+        CxxString::to_string,
+    );
+
+    url.parse()
+        .map_err(|err| format!("Invalid URL `{url}`: {err}"))
+}
+
+/// Empty if `url` is valid, otherwise the reason it is not.
+fn validate_url(url: &UniquePtr<CxxString>) -> String {
+    parse_url(url).err().unwrap_or_default()
+}
+
+fn new_routex_client(
+    transport: SharedPtr<ffi::HttpTransport>,
+    url: &UniquePtr<CxxString>,
+) -> anyhow::Result<Box<RoutexClient>> {
     Ok(Box::new(RoutexClient {
         inner: routex_client::RoutexClient::for_distribution(
             "C++",
             env!("CARGO_PKG_VERSION"),
-            url.as_ref()
-                .map_or("https://api.yaxi.tech/".parse(), |url| {
-                    url.to_string().parse()
-                })?,
-            reqwest::Client::new(),
+            parse_url(url).map_err(|err| anyhow!(err))?,
+            CxxTransport(transport),
         ),
-        runtime: Runtime::new()?,
     }))
 }
 
 impl RoutexClient {
-    fn system_version(&self, ticket_id: &CxxString) -> anyhow::Result<String> {
-        Ok(self
-            .runtime
-            .block_on(self.inner.system_version(ticket_id.to_string().parse()?))
-            .unwrap_or_default())
+    fn system_version(&self, ticket_id: &CxxString) -> String {
+        let Ok(ticket_id) = ticket_id.to_string().parse() else {
+            return String::new();
+        };
+
+        futures::executor::block_on(self.inner.system_version(ticket_id)).unwrap_or_default()
     }
 
     fn trace_id(&self) -> Vec<u8> {
@@ -958,14 +1091,19 @@ impl RoutexClient {
         let ticket = ticket.to_string();
 
         with_any_service!(ticket, authenticated, {
-            self.runtime
-                .block_on(self.inner.trace(&authenticated, trace_id.as_slice()))
+            futures::executor::block_on(self.inner.trace(&authenticated, trace_id.as_slice()))
         })
         .into()
     }
 
-    fn set_redirect_uri(&mut self, redirect_uri: &CxxString) -> Result<(), InvalidHeaderValue> {
-        self.inner.set_redirect_uri(&redirect_uri.to_string())
+    /// Empty if the redirect URI got set, otherwise the reason it is invalid.
+    fn set_redirect_uri(&mut self, redirect_uri: &CxxString) -> String {
+        let redirect_uri = redirect_uri.to_string();
+
+        match self.inner.set_redirect_uri(&redirect_uri) {
+            Ok(()) => String::new(),
+            Err(err) => format!("Invalid redirect URI `{redirect_uri}`: {err}"),
+        }
     }
 
     fn set_recurring_consents(&mut self, enabled: bool) {
@@ -981,7 +1119,7 @@ impl RoutexClient {
         let ticket = ticket.to_string();
 
         with_any_service!(ticket, authenticated, {
-            self.runtime.block_on(self.inner.register_redirect_uri(
+            futures::executor::block_on(self.inner.register_redirect_uri(
                 &authenticated,
                 handle.to_string(),
                 redirect_uri.to_string(),
@@ -1030,7 +1168,7 @@ impl RoutexClient {
 
         Ok(
             match with_any_service!(ticket, authenticated, {
-                self.runtime.block_on(
+                futures::executor::block_on(
                     self.inner
                         .search(authenticated, filters)
                         .iban_detection(iban_detection)
@@ -1063,28 +1201,22 @@ impl RoutexClient {
         )
     }
 
-    fn info(
-        &self,
-        ticket: &CxxString,
-        connection_id: &CxxString,
-    ) -> Result<ffi::InfoResult, uuid::Error> {
+    fn info(&self, ticket: &CxxString, connection_id: &CxxString) -> ffi::InfoResult {
         let ticket = ticket.to_string();
 
-        match with_any_service!(ticket, authenticated, {
-            self.runtime.block_on(
-                self.inner
-                    .info(&authenticated, connection_id.to_string().parse()?),
-            )
-        }) as Result<ConnectionInfo, ffi::Error>
-        {
-            Ok(info) => Ok(ffi::InfoResult {
+        match parse_connection_id(connection_id).and_then(|connection_id| {
+            with_any_service!(ticket, authenticated, {
+                futures::executor::block_on(self.inner.info(&authenticated, connection_id))
+            }) as Result<ConnectionInfo, ffi::Error>
+        }) {
+            Ok(info) => ffi::InfoResult {
                 value: UniquePtr::new(info.into()),
                 error: UniquePtr::null(),
-            }),
-            Err(err) => Ok(ffi::InfoResult {
+            },
+            Err(err) => ffi::InfoResult {
                 value: UniquePtr::null(),
                 error: UniquePtr::new(err),
-            }),
+            },
         }
     }
 }
@@ -1124,7 +1256,7 @@ macro_rules! service {
                         request = request.session(session.as_slice().to_vec().into());
                     }
 
-                    Ok(self.runtime.block_on(request.send()).into())
+                    Ok(futures::executor::block_on(request.send()).into())
                 }
             }
         }
@@ -1151,7 +1283,10 @@ macro_rules! service {
                 ) -> anyhow::Result<ffi::ServiceResult> {
                     let mut request = self.inner.$service(
                         Credentials {
-                            connection_id: connection_id.to_string().parse()?,
+                            connection_id: match parse_connection_id(connection_id) {
+                                Ok(connection_id) => connection_id,
+                                Err(err) => return Ok(err.into()),
+                            },
                             user_id: user_id.as_ref().map(CxxString::to_string),
                             password: password.as_ref().map(CxxString::to_string),
                             connection_data: connection_data.as_ref().map(|v| v.as_slice().to_vec().into()),
@@ -1171,7 +1306,7 @@ macro_rules! service {
                         request = request.session(session.as_slice().to_vec().into());
                     }
 
-                    Ok(self.runtime.block_on(request.send()).into())
+                    Ok(futures::executor::block_on(request.send()).into())
                 }
 
                 fn [<respond_$service>](
@@ -1180,7 +1315,7 @@ macro_rules! service {
                     context: &CxxVector<u8>,
                     response: String,
                 ) -> ffi::ServiceResult {
-                    self.runtime.block_on(
+                    futures::executor::block_on(
                             self.inner.[<respond_$service>](
                                 &match ticket.to_string().parse() {
                                     Ok(ticket) => ticket,
@@ -1197,7 +1332,7 @@ macro_rules! service {
                     ticket: &CxxString,
                     context: &CxxVector<u8>,
                 ) -> ffi::ServiceResult {
-                    self.runtime.block_on(
+                    futures::executor::block_on(
                             self.inner.[<confirm_$service>](
                                 &match ticket.to_string().parse() {
                                     Ok(ticket) => ticket,
@@ -1227,7 +1362,7 @@ service! {
     balances
     (accounts: &CxxVector<ffi::AccountReference>)
     {
-        accounts.into_iter().map(Into::into),
+        accounts.into_iter().map(TryInto::try_into).collect::<anyhow::Result<Vec<_>>>()?,
     }
 }
 
@@ -1238,12 +1373,9 @@ service! {
 
 service! {
     collect_payment
-    (account: &UniquePtr<ffi::AccountReference>)
+    (account: &UniquePtr<ffi::DebtorAccountReference>)
     {
-        account.as_ref().map(|account| DebtorAccountReference {
-            id: DebtorAccountIdentifier::Iban(account.iban.clone()),
-            currency: account.currency.as_ref().map(CxxString::to_string),
-        }),
+        account.as_ref().map(Into::into)
     }
 }
 
@@ -1252,7 +1384,7 @@ service! {
     (
         product: ffi::PaymentProduct,
         details: &CxxVector<ffi::TransferDetails>,
-        debtor_account: &UniquePtr<ffi::AccountReference>,
+        debtor_account: &UniquePtr<ffi::DebtorAccountReference>,
         debtor_name: &UniquePtr<CxxString>,
         requested_execution_date: &UniquePtr<ffi::I64>,
     )
@@ -1268,14 +1400,16 @@ service! {
         },
         debtor_account.as_ref().map(Into::into),
         debtor_name.as_ref().map(CxxString::to_string),
-        requested_execution_date.as_ref().map(|secs| Ok::<_, anyhow::Error>(ISODateTimeOrDate::OffsetDateTime(
-            Utc
-                .timestamp_opt(secs.val, 0)
-                .earliest()
-                .ok_or_else(|| anyhow!("Failed to read requested_execution_date"))?
-                .fixed_offset()
-        ))).transpose()?,
-        details.into_iter().map(|ffi::TransferDetails {
+        match requested_execution_date.as_ref() {
+            Some(secs) => match Utc.timestamp_opt(secs.val, 0).earliest() {
+                Some(date) => Some(ISODateTimeOrDate::OffsetDateTime(date.fixed_offset())),
+                None => return Ok(unexpected_value(format!("Invalid requested execution date `{}`", secs.val)).into()),
+            },
+            None => None,
+        },
+        {
+        let mut converted = Vec::with_capacity(details.len());
+        for ffi::TransferDetails {
             end_to_end_identification,
             amount,
             currency,
@@ -1286,9 +1420,14 @@ service! {
             creditor_country,
             remittance,
             charge_bearer,
-        }| {
+        } in details {
+            let amount = amount.to_string();
+            let amount = match amount.parse::<Decimal>() {
+                Ok(amount) => amount,
+                Err(err) => return Ok(unexpected_value(format!("Invalid amount `{amount}`: {err}")).into()),
+            };
             let mut details = TransferDetails::new(
-                Amount::new(amount.to_string().parse::<Decimal>()?, currency.to_string()),
+                Amount::new(amount, currency.to_string()),
                 CreditorAccountIdentifier::Iban(creditor_iban.to_string()),
                 creditor_name.to_string(),
             );
@@ -1308,7 +1447,9 @@ service! {
                 ffi::ChargeBearer::FollowingServiceLevel => ChargeBearer::FollowingServiceLevel,
                 _ => bail!("Unexpected ChargeBearer value"),
             })).transpose()?;
-            Ok::<_, anyhow::Error>(details)
-        }).collect::<Result<Vec<_>, _>>()?,
+            converted.push(details);
+        }
+        converted
+        },
     }
 }
