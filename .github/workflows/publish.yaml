@@ -1,10 +1,10 @@
 # Build, verify and publish the routex-client-cxx NuGet package.
 #
-# Stable tags (no '-' in the version) publish to nuget.org;
-# prerelease tags (containing '-', e.g. v1.2.3-rc.1) publish to the
+# Stable tags (no '-' in the version) and -reqwest tags publish to nuget.org;
+# other prerelease tags (containing '-', e.g. v1.2.3-rc.1) publish to the
 # int.nugettest.org integration instance instead.
 #
-# Publishing uses Trusted Publishing (OIDC) — no API key is stored as a
+# NuGet publishing uses Trusted Publishing (OIDC) — no API key is stored as a
 # secret. A matching policy must exist on each target registry pointing at:
 #   - Repository owner / name: this repository
 #   - Workflow file: publish.yaml
@@ -58,8 +58,9 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           case "$version" in
-            *-*) echo "is-prerelease=true"  >> "$GITHUB_OUTPUT" ;;
-            *)   echo "is-prerelease=false" >> "$GITHUB_OUTPUT" ;;
+            *-reqwest*) echo "is-prerelease=false" >> "$GITHUB_OUTPUT" ;;
+            *-*)        echo "is-prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)          echo "is-prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
   build:

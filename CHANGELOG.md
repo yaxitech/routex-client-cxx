@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0-reqwest] - unreleased
+
+0.3.0 without the `HttpTransport` change: the library still bundles its HTTP stack (reqwest, hyper, rustls, tokio), and the `RoutexClient` constructor is the same as in 0.2.0.
+
+### Changed
+
+- **Breaking:** `AccountReference` is a variant of `IbanAccountReference` and `NumberAccountReference`, so `balances` supports accounts without an IBAN.
+- **Breaking:** `collectPayment` and `transfer` take a `DebtorAccountReference`, a variant of `IbanAccountReference`, instead of an `AccountReference`.
+- The bundled HTTP stack is updated (h2, rustls, rustls-webpki, tokio, webpki-root-certs) to address security advisories.
+
+### Fixed
+
+- An invalid connection ID is reported as an `UnexpectedValue` error (`info` and all services taking `Credentials`).
+- An invalid `TransferDetails.amount` or `requestedExecutionDate` is reported as an `UnexpectedValue` error by `transfer`.
+- `systemVersion` returns `std::nullopt` for an invalid ticket ID instead of throwing.
+- The `RoutexClient` constructor and `setRedirectUri` throw `std::invalid_argument` for an invalid URL or redirect URI.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added

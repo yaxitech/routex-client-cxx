@@ -1,6 +1,6 @@
 [package]
 name = "routex-client-cxx"
-version = "0.2.0"
+version = "0.3.0-reqwest"
 build = "build.rs"
 edition = "2024"
 rust-version = "1.88"
@@ -18,7 +18,6 @@ routex-api = "0.30.1"
 routex-client = "0.20"
 routex-client-common = { version = "0.0.5", features = ["error"] }
 tokio = { version = "1.40", features = ["rt-multi-thread"] }
-uuid = "1.5"
 
 [build-dependencies]
 cc = "1.2.62"
@@ -32,6 +31,7 @@ crate-type = ["staticlib", "cdylib"]
 
 [profile.release]
 codegen-units = 1
+lto = true
 
 [package.metadata.winresource]
 FileDescription = "YAXI Open Banking services client"
