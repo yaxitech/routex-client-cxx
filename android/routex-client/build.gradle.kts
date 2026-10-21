@@ -11,8 +11,8 @@ plugins {
 group = "tech.yaxi"
 
 // The crate manifest is the one place the version lives - it names the version in
-// development, bumped right after each release, and nix reads the same file for
-// the static libraries. `-Prelease` publishes exactly that; anything else
+// development, bumped right after each release, and the static libraries take
+// theirs from the same file. `-Prelease` publishes exactly that; anything else
 // publishes a snapshot of it, so a release can never carry a number the manifest
 // does not have.
 val crateVersion =
@@ -37,8 +37,8 @@ android {
     namespace = "tech.yaxi.routex.cxx"
     compileSdk = 36
 
-    // The Android NDK comes from the nix dev shell rather than from an SDK
-    // install, so point AGP at it directly when the shell provides one.
+    // When the environment provides an Android NDK outside an SDK install,
+    // point AGP at it directly.
     System.getenv("ANDROID_NDK_ROOT")?.takeIf { it.isNotBlank() }?.let { root ->
         ndkPath = root
         // AGP compares ndkPath against its own default ndkVersion and fails the
@@ -52,8 +52,7 @@ android {
     }
 
     defaultConfig {
-        // API 26 is what the Rust toolchain links against (the `…26-clang`
-        // wrappers in nixos/pkgs/routex-client/routex-client-lib-android.nix).
+        // API 26 is what the Rust static libraries link against.
         // Every abi.json in the published package repeats this number, so the
         // two have to be changed together.
         minSdk = 26
