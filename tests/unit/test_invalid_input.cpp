@@ -23,7 +23,7 @@ constexpr auto CONNECTION_ID = "connection-96386142-60e5-4ca9-abcf-944efce5bc1e"
 constexpr auto INVALID_CONNECTION_ID = "connection-not-an-id";
 
 HttpResponse failingTransport(const HttpRequest &) {
-    FAIL("transport must not be called");
+    FAIL_CHECK("transport must not be called");
     return {};
 }
 
