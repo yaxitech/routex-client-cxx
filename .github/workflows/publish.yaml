@@ -8,7 +8,7 @@
 # which has to match the tag. Central has no test instance, so prerelease tags
 # upload a deployment without releasing it; drop it in the Central Portal.
 #
-# Publishing uses Trusted Publishing (OIDC) — no API key is stored as a
+# NuGet publishing uses Trusted Publishing (OIDC) — no API key is stored as a
 # secret. A matching policy must exist on each target registry pointing at:
 #   - Repository owner / name: this repository
 #   - Workflow file: publish.yaml
