@@ -267,6 +267,7 @@ add_executable(yaxi_unit_tests
     test_main.cpp
     test_account_filter.cpp
     test_client_online.cpp
+    test_invalid_input.cpp
     helpers.cpp
     ticket.cpp
 )

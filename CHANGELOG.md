@@ -1,19 +1,27 @@
 # Changelog
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-10-21
 
 ### Added
 
 - `HttpTransport`, the callback through which `RoutexClient` sends its HTTP requests, with `HttpRequest`, `HttpResponse` and `HttpHeader`.
-- An Android distribution: an AAR carrying a prefab package with the modules `routex-client` (shared) and `routex-client-static`, for `arm64-v8a`, `armeabi-v7a` and `x86_64`.
 
 ### Changed
 
 - **Breaking:** The `RoutexClient` constructor takes an `HttpTransport` as its first argument. The application supplies the HTTP stack.
+- **Breaking:** `AccountReference` is a variant of `IbanAccountReference` and `NumberAccountReference`, so `balances` supports accounts without an IBAN.
+- **Breaking:** `collectPayment` and `transfer` take a `DebtorAccountReference`, a variant of `IbanAccountReference`, instead of an `AccountReference`.
 
 ### Removed
 
 - The bundled HTTP stack (reqwest, hyper, rustls, tokio). The library no longer does any networking or TLS itself.
+
+### Fixed
+
+- An invalid connection ID is reported as an `UnexpectedValue` error (`info` and all services taking `Credentials`).
+- An invalid `TransferDetails.amount` or `requestedExecutionDate` is reported as an `UnexpectedValue` error by `transfer`.
+- `systemVersion` returns `std::nullopt` for an invalid ticket ID instead of throwing.
+- The `RoutexClient` constructor and `setRedirectUri` throw `std::invalid_argument` for an invalid URL or redirect URI.
 
 ## [0.2.0] - 2026-07-31
 
