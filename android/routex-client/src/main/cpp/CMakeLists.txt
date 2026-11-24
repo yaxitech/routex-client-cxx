@@ -19,6 +19,8 @@ endif()
 # src/lib.cc into it - so neither target contributes code of its own. CMake just
 # needs a source file to create a target from.
 set(_placeholder "${CMAKE_CURRENT_SOURCE_DIR}/placeholder.cpp")
+# Rebuilds the static module, and so reruns its copy, when the archive changes.
+set_source_files_properties("${_placeholder}" PROPERTIES OBJECT_DEPENDS "${YAXI_RUST_LIB}")
 
 # Shared module. Nothing in this target references the archive, so the members
 # have to be pulled in wholesale.

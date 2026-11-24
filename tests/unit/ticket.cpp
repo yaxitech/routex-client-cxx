@@ -64,6 +64,12 @@ TicketGenerator::transactions(const std::string &ticketId, const nlohmann::json 
 }
 
 std::string
+TicketGenerator::standingOrders(const std::string &ticketId, const nlohmann::json &data,
+                                std::optional<std::chrono::system_clock::time_point> exp) const {
+    return issue(ticketId, "StandingOrders", data, exp);
+}
+
+std::string
 TicketGenerator::collectPayment(const std::string &ticketId, const nlohmann::json &data,
                                 std::optional<std::chrono::system_clock::time_point> exp) const {
     return issue(ticketId, "CollectPayment", data, exp);

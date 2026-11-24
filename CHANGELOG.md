@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0] - 2026-11-24
+
+### Added
+
+- `standingOrders`, `respondStandingOrders` and `confirmStandingOrders`
+- `AccountField::MaskedPan`, the masked payment card number
+- `MaskedPanAccountReference` as another `AccountReference`
+- Built-in HTTP stack (reqwest, rustls, tokio), used if the `RoutexClient` constructor gets no `HttpTransport` (not on Android)
+
+### Changed
+
+- **Breaking:** `balances` takes a single `AccountReference`
+- `traceId()` is reset with every request, so it is empty if a request fails without a response
+- The `HttpTransport` argument of the `RoutexClient` constructor is optional, except on Android
+
 ## [0.3.0] - 2026-10-21
 
 ### Added

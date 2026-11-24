@@ -70,6 +70,7 @@ MSVC presets only resolve on Windows, GCC/Clang presets only on non-Windows
 | ---------------------- | ---------------------------------- | ------------------------------------------------------------- |
 | `YAXI_SANITIZER`       | `off`                              | `off`, `address`, `undefined`, `address+undefined`, `thread`, `memory` |
 | `YAXI_BUILD_RUST_LIB`  | `ON`                               | Run `cargo build` as part of the CMake build                  |
+| `YAXI_BUILTIN_HTTP`    | `ON`                               | Build with the built-in HTTP stack; `OFF` passes `--no-default-features` to cargo and defines `YAXI_NO_BUILTIN_HTTP` |
 | `YAXI_LIB`             | derived from `target/…`            | Path to the Rust static lib / Windows import lib              |
 | `YAXI_DLL`             | derived (Windows only)             | Path to the Rust cdylib                                       |
 | `YAXI_INCLUDE_DIR`     | `<repo>/include`                   | Where to find `yaxi/routex-client.h`                          |

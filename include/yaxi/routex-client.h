@@ -22,6 +22,11 @@
 #define YAXI_API
 #endif
 
+// The built-in HTTP stack is not available on Android
+#if defined(__ANDROID__) && !defined(YAXI_NO_BUILTIN_HTTP)
+#define YAXI_NO_BUILTIN_HTTP
+#endif
+
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4251) // member needs dll-interface
@@ -67,10 +72,11 @@ struct HttpResponse {
 /**
  * HTTP transport used by `RoutexClient` to talk to the YAXI service.
  *
- * Supply your application's own HTTP stack. The callback is invoked
- * synchronously on the calling thread and is expected to block until the
- * response is available. Throw any `std::exception` on a transport failure — it
- * surfaces as a `RequestError` from the `RoutexClient` method that triggered it.
+ * Optionally supply your application's own HTTP stack instead of the built-in
+ * one. The callback is invoked synchronously on the calling thread and is
+ * expected to block until the response is available. Throw any `std::exception`
+ * on a transport failure — it surfaces as a `RequestError` from the
+ * `RoutexClient` method that triggered it.
  *
  * The transport must not call into the `RoutexClient` that invoked it.
  */
@@ -747,6 +753,7 @@ class YAXI_API AccountField {
   public:
     static const OptionalStringField Iban;
     static const OptionalStringField Number;
+    static const OptionalStringField MaskedPan;
     static const OptionalStringField Bic;
     static const OptionalStringField BankCode;
     static const CurrencyField Currency;
@@ -803,7 +810,17 @@ struct NumberAccountReference {
     std::optional<std::string> currency = std::nullopt;
 };
 
-using AccountReference = std::variant<IbanAccountReference, NumberAccountReference>;
+/**
+ * Reference to a card account by its masked payment card number, with an optional ISO 4217
+ * currency code for multi-currency accounts.
+ */
+struct MaskedPanAccountReference {
+    std::string maskedPan;
+    std::optional<std::string> currency = std::nullopt;
+};
+
+using AccountReference =
+    std::variant<IbanAccountReference, NumberAccountReference, MaskedPanAccountReference>;
 
 /**
  * Reference to a debtor account for payments.
@@ -881,13 +898,19 @@ struct TransferDetails {
 class [[nodiscard]] YAXI_API RoutexClient final {
   public:
     /**
-     * Create a new client backed by the given HTTP transport, optionally
-     * providing a custom URL.
+     * Create a new client, optionally providing an HTTP transport and a custom URL.
+     * Without a transport (an empty `HttpTransport`), the built-in HTTP stack is used.
      *
-     * Throws `std::invalid_argument` if the transport is empty or the URL is invalid.
+     * Throws `std::invalid_argument` if the URL is invalid, and `std::runtime_error` if the
+     * built-in HTTP stack fails to initialize.
      */
+#ifdef YAXI_NO_BUILTIN_HTTP
     explicit RoutexClient(HttpTransport transport,
                           const std::optional<std::string> &url = std::nullopt);
+#else
+    explicit RoutexClient(HttpTransport transport = {},
+                          const std::optional<std::string> &url = std::nullopt);
+#endif
 
     ~RoutexClient();
 
@@ -988,8 +1011,7 @@ class [[nodiscard]] YAXI_API RoutexClient final {
      */
     [[nodiscard]] Result<ServiceResponse>
     balances(const std::variant<Credentials, ConnectionData> &access, const std::string &ticket,
-             const std::vector<AccountReference> &accounts,
-             const std::optional<Session> &session = std::nullopt,
+             const AccountReference &account, const std::optional<Session> &session = std::nullopt,
              const std::optional<bool> &recurringConsents = std::nullopt) const;
 
     /**
@@ -1031,6 +1053,30 @@ class [[nodiscard]] YAXI_API RoutexClient final {
     [[nodiscard]] Result<ServiceResponse>
     confirmTransactions(const std::string &ticket,
                         const ConfirmationContext &confirmationContext) const;
+
+    /**
+     * [Standing Orders service](https://docs.yaxi.tech/standing-orders.html).
+     */
+    [[nodiscard]] Result<ServiceResponse>
+    standingOrders(const Credentials &credentials, const std::string &ticket,
+                   const std::optional<Session> &session = std::nullopt,
+                   const std::optional<bool> &recurringConsents = std::nullopt) const;
+
+    /**
+     * Respond to `Dialog` with `InputContext` returned from [Standing Orders
+     * service](https://docs.yaxi.tech/standing-orders.html).
+     */
+    [[nodiscard]] Result<ServiceResponse> respondStandingOrders(const std::string &ticket,
+                                                                const InputContext &inputContext,
+                                                                const std::string &response) const;
+
+    /**
+     * Confirm `Dialog` or `Redirect` with `ConfirmationContext` returned from [Standing Orders
+     * service](https://docs.yaxi.tech/standing-orders.html).
+     */
+    [[nodiscard]] Result<ServiceResponse>
+    confirmStandingOrders(const std::string &ticket,
+                          const ConfirmationContext &confirmationContext) const;
 
     /**
      * [Collect Payment service](https://docs.yaxi.tech/collect-payment.html).

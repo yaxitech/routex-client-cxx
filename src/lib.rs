@@ -91,7 +91,7 @@ mod ffi {
             password: &UniquePtr<CxxString>,
             connection_data: &UniquePtr<CxxVector<u8>>,
             ticket: &CxxString,
-            accounts: &CxxVector<AccountReference>,
+            account: &AccountReference,
             session: &UniquePtr<CxxVector<u8>>,
             recurring_consents: TriBool,
         ) -> Result<ServiceResult>;
@@ -100,7 +100,7 @@ mod ffi {
             self: &RoutexClient,
             connection_data: &CxxVector<u8>,
             ticket: &CxxString,
-            accounts: &CxxVector<AccountReference>,
+            account: &AccountReference,
             session: &UniquePtr<CxxVector<u8>>,
         ) -> Result<ServiceResult>;
 
@@ -144,6 +144,31 @@ mod ffi {
         ) -> ServiceResult;
 
         fn confirm_transactions(
+            self: &RoutexClient,
+            ticket: &CxxString,
+            context: &CxxVector<u8>,
+        ) -> ServiceResult;
+
+        #[allow(clippy::too_many_arguments)]
+        fn standing_orders(
+            self: &RoutexClient,
+            connection_id: &CxxString,
+            user_id: &UniquePtr<CxxString>,
+            password: &UniquePtr<CxxString>,
+            connection_data: &UniquePtr<CxxVector<u8>>,
+            ticket: &CxxString,
+            session: &UniquePtr<CxxVector<u8>>,
+            recurring_consents: TriBool,
+        ) -> Result<ServiceResult>;
+
+        fn respond_standing_orders(
+            self: &RoutexClient,
+            ticket: &CxxString,
+            context: &CxxVector<u8>,
+            response: String,
+        ) -> ServiceResult;
+
+        fn confirm_standing_orders(
             self: &RoutexClient,
             ticket: &CxxString,
             context: &CxxVector<u8>,
@@ -458,6 +483,7 @@ mod ffi {
         ProductName,
         Status,
         Type,
+        MaskedPan,
     }
 
     #[derive(Debug)]
@@ -503,6 +529,7 @@ mod ffi {
     struct AccountReference {
         iban: UniquePtr<CxxString>,
         number: UniquePtr<CxxString>,
+        masked_pan: UniquePtr<CxxString>,
         currency: UniquePtr<CxxString>,
     }
 
@@ -934,6 +961,7 @@ account_fields! {
     filter
     Iban { filter.string.as_ref().map(ToString::to_string) }
     Number { filter.string.as_ref().map(ToString::to_string) }
+    MaskedPan { filter.string.as_ref().map(ToString::to_string) }
     Bic { filter.string.as_ref().map(ToString::to_string) }
     BankCode { filter.string.as_ref().map(ToString::to_string) }
     Currency { filter.string.as_ref().ok_or(anyhow!("Invalid filter value"))?.to_string() }
@@ -969,10 +997,12 @@ impl TryFrom<&ffi::AccountReference> for AccountReference {
         Ok(AccountReference {
             id: if let Some(iban) = account.iban.as_ref() {
                 AccountIdentifier::Iban(iban.to_string())
+            } else if let Some(number) = account.number.as_ref() {
+                AccountIdentifier::Number(number.to_string())
             } else {
-                AccountIdentifier::Number(
+                AccountIdentifier::MaskedPan(
                     account
-                        .number
+                        .masked_pan
                         .as_ref()
                         .ok_or(anyhow!("Invalid account reference"))?
                         .to_string(),
@@ -1040,8 +1070,55 @@ impl HttpClient for CxxTransport {
     }
 }
 
+#[derive(Clone)]
+enum Transport {
+    #[cfg(builtin_http)]
+    Reqwest(reqwest::blocking::Client),
+    Cxx(CxxTransport),
+}
+
+impl HttpClient for Transport {
+    async fn execute(&self, req: Request<Vec<u8>>) -> Result<Response, Error> {
+        match self {
+            #[cfg(builtin_http)]
+            Self::Reqwest(client) => {
+                execute_blocking(client, req).map_err(|err| Error::RequestError(anyhow!(err)))
+            }
+            Self::Cxx(transport) => transport.execute(req).await,
+        }
+    }
+}
+
+#[cfg(builtin_http)]
+fn execute_blocking(
+    client: &reqwest::blocking::Client,
+    req: Request<Vec<u8>>,
+) -> reqwest::Result<Response> {
+    let response = client.execute(req.try_into()?)?;
+    Ok(Response {
+        status: response.status(),
+        headers: response.headers().clone(),
+        body: response.bytes()?,
+    })
+}
+
+#[cfg(builtin_http)]
+fn builtin_transport() -> anyhow::Result<Transport> {
+    Ok(Transport::Reqwest(
+        reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(None)
+            .build()?,
+    ))
+}
+
+#[cfg(not(builtin_http))]
+fn builtin_transport() -> anyhow::Result<Transport> {
+    bail!("No HttpTransport given and built without the built-in HTTP stack")
+}
+
 struct RoutexClient {
-    inner: routex_client::RoutexClient<CxxTransport>,
+    inner: routex_client::RoutexClient<Transport>,
 }
 
 /// Parses the client URL, defaulting to the production environment. The error describes the invalid URL.
@@ -1069,7 +1146,11 @@ fn new_routex_client(
             "C++",
             env!("CARGO_PKG_VERSION"),
             parse_url(url).map_err(|err| anyhow!(err))?,
-            CxxTransport(transport),
+            if transport.is_null() {
+                builtin_transport()?
+            } else {
+                Transport::Cxx(CxxTransport(transport))
+            },
         ),
     }))
 }
@@ -1360,15 +1441,19 @@ service! {
 service! {
     @without_credentials
     balances
-    (accounts: &CxxVector<ffi::AccountReference>)
+    (account: &ffi::AccountReference)
     {
-        accounts.into_iter().map(TryInto::try_into).collect::<anyhow::Result<Vec<_>>>()?,
+        account.try_into()?,
     }
 }
 
 service! {
     @without_credentials
     transactions
+}
+
+service! {
+    standing_orders
 }
 
 service! {

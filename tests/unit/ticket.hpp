@@ -32,6 +32,10 @@ class TicketGenerator {
                  std::optional<std::chrono::system_clock::time_point> exp = std::nullopt) const;
 
     std::string
+    standingOrders(const std::string &ticketId, const nlohmann::json &data,
+                   std::optional<std::chrono::system_clock::time_point> exp = std::nullopt) const;
+
+    std::string
     collectPayment(const std::string &ticketId, const nlohmann::json &data,
                    std::optional<std::chrono::system_clock::time_point> exp = std::nullopt) const;
 

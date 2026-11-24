@@ -1,5 +1,10 @@
 #include <yaxi/routex-client.h>
 
+#include <type_traits>
+
+// Android has no built-in HTTP stack, so the header has to require a transport
+static_assert(!std::is_default_constructible_v<yaxi::RoutexClient>);
+
 // Never called. It exists so the compiler sees the published headers and the
 // linker has to resolve the published symbols out of the prefab package.
 extern "C" void yaxiConsumerLinkCheck() {

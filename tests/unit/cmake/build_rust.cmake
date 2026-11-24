@@ -8,6 +8,7 @@
 # Optional inputs:
 #   RELEASE          If defined (1), pass --release to cargo
 #   CARGO_TARGET     Triple to pass via --target (cross-compile)
+#   NO_DEFAULT_FEATURES  If defined (1), pass --no-default-features to cargo
 #   DEBUG_FLAGS_PS1  Absolute path to scripts/debug-flags.ps1. When set, cargo
 #                    is invoked through Invoke-WithDebugFlags so the Rust
 #                    component links against the debug CRT (/MDd). Only set
@@ -16,6 +17,9 @@
 set(_args build)
 if(DEFINED RELEASE)
     list(APPEND _args --release)
+endif()
+if(DEFINED NO_DEFAULT_FEATURES)
+    list(APPEND _args --no-default-features)
 endif()
 if(CARGO_TARGET)
     list(APPEND _args --target ${CARGO_TARGET})

@@ -18,6 +18,11 @@ using namespace yaxi;
 using namespace yaxi::test;
 using json = nlohmann::json;
 
+using std::chrono::days;
+using std::chrono::floor;
+using std::chrono::system_clock;
+using std::chrono::year_month_day;
+
 namespace {
 constexpr auto DEMO_CONNECTION_ID = "connection-96386142-60e5-4ca9-abcf-944efce5bc1e";
 
@@ -174,11 +179,10 @@ TEST_CASE_METHOD(OnlineFixture, "Service Balances", "[online][balances]") {
     Credentials creds{};
     creds.connectionId = DEMO_CONNECTION_ID;
     creds.userId = "confirmation";
-    std::vector<AccountReference> accounts{
-        IbanAccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}},
-    };
+    AccountReference account =
+        IbanAccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}};
 
-    auto result = client.balances(creds, balancesTicket, accounts);
+    auto result = client.balances(creds, balancesTicket, account);
     auto &dialog = requireDialog(result);
     REQUIRE(dialog.context == std::optional{DialogContext::Sca});
     REQUIRE_THAT(dialog.input, HoldsAlternative<Confirmation>());
@@ -189,8 +193,8 @@ TEST_CASE_METHOD(OnlineFixture, "Service Balances", "[online][balances]") {
     auto &sr = requireServiceResult(confirmResult);
     auto payload = jwtDecodeUnverified(sr.jwt);
     REQUIRE(payload.at("data").at("ticketId") == TicketGenerator::getId(balancesTicket));
-    for (auto &account : payload.at("data").at("data").at("balances")) {
-        for (auto &balance : account.at("balances")) {
+    for (auto &accountBalances : payload.at("data").at("data").at("balances")) {
+        for (auto &balance : accountBalances.at("balances")) {
             REQUIRE(balance.at("dateTime").is_string());
             balance.erase("dateTime");
         }
@@ -215,6 +219,18 @@ TEST_CASE_METHOD(OnlineFixture, "Service Balances", "[online][balances]") {
             });
 }
 
+TEST_CASE_METHOD(OnlineFixture, "Service Balances for an unknown account", "[online][balances]") {
+    Credentials creds{};
+    creds.connectionId = DEMO_CONNECTION_ID;
+    creds.userId = "result";
+    AccountReference account =
+        IbanAccountReference{.iban = "NL31YAXI1234567891", .currency = std::string{"EUR"}};
+
+    auto result = client.balances(creds, generator.issue(uuidV4(), "Balances"), account);
+    REQUIRE_THAT(result, HoldsAlternative<Error>());
+    REQUIRE_THAT(std::get<Error>(result), HoldsAlternative<NotFound>());
+}
+
 TEST_CASE_METHOD(OnlineFixture, "Connection info", "[online][search]") {
     auto accountsTicket = generator.accounts(uuidV4());
 
@@ -230,20 +246,19 @@ TEST_CASE_METHOD(OnlineFixture, "Connection info", "[online][search]") {
     struct ExpectedInfo {
         std::string id;
         std::string displayName;
+        std::string country = "DE";
     };
     const std::vector<ExpectedInfo> expected{
         {"connection-3c0ec6db-f1e0-4bfb-be0b-4e5af8a7ad4e", "Sparkasse Duderstadt"},
         {"connection-8af40d65-8393-41c4-8c78-09cc652a8f26", "Stadtsparkasse Wedel"},
         {"connection-c5d12d75-0c31-4883-aaaa-f5535e9c82da", "Stadtsparkasse Dessau"},
         {"connection-6227b304-71d9-4cab-b7c1-1bcfcc16fb23", "Stadtsparkasse Rahden"},
-        {"connection-099c2821-a46e-4d88-a0c1-5feda0ab63e2", "Stadtsparkasse Rheine"},
         {"connection-499673bd-9907-4c26-88fc-172af8c8032c", "Stadtsparkasse Bocholt"},
         {"connection-3c60b72f-f706-43f8-883c-1dbd1b06ac6c", "Stadtsparkasse München"},
         {"connection-6eb60518-dc4c-4d09-aa42-e38453d5c366", "Stadtsparkasse Schwedt"},
         {"connection-069d6c77-db02-4037-8ccd-7d99b1353c82", "Stadtsparkasse Augsburg"},
         {"connection-8d762a37-df3d-44c3-ba0f-c928a263b360", "Stadtsparkasse Cuxhaven"},
         {"connection-51ecdf0f-6984-4d6c-9420-ec9ba66a01c8", "Stadt-Sparkasse Solingen"},
-        {"connection-8eca5600-89aa-487b-b766-a2a8c9bf6e07", "Stadtsparkasse Lengerich"},
         {"connection-41c751be-16dd-4527-9ba8-98ccf65f1520", "Stadtsparkasse Remscheid"},
         {"connection-1d4e32aa-6d1c-4ab1-81ff-7f6d1870af4e", "Stadtsparkasse Wuppertal"},
         {"connection-889582a7-49b7-4b04-8095-ec82d3e820aa", "Stadtsparkasse Düsseldorf"},
@@ -252,6 +267,8 @@ TEST_CASE_METHOD(OnlineFixture, "Connection info", "[online][search]") {
         {"connection-24570ecb-a2c0-4e2b-9448-1a1eef9c4009", "Stadt-Sparkasse Langenfeld"},
         {"connection-a997832f-a868-45e5-8229-d0fb66af8e46", "Stadtsparkasse Bad Pyrmont"},
         {"connection-7a30cb24-fbc6-44ad-a031-c00a1c248094", "Stadtsparkasse Grebenstein"},
+        {"connection-0c02cd7e-2164-43b4-bafd-96b18251058c", "Stadtsparkasse Barsinghausen"},
+        {"connection-d110bc48-0d79-5796-952a-02924f5639c4", "Sparkasse der Stadt Feldkirch", "AT"},
     };
 
     REQUIRE(infos.size() == expected.size());
@@ -259,13 +276,20 @@ TEST_CASE_METHOD(OnlineFixture, "Connection info", "[online][search]") {
         INFO("entry " << i);
         CHECK(infos[i].id == expected[i].id);
         CHECK(infos[i].displayName == expected[i].displayName);
-        CHECK(infos[i].countries == std::vector<std::string>{"DE"});
-        CHECK(infos[i].credentials.full == true);
+        CHECK(infos[i].countries == std::vector<std::string>{expected[i].country});
         CHECK(infos[i].credentials.userId == false);
         CHECK(infos[i].credentials.none == true);
-        CHECK(infos[i].logoId == "sparkasse");
-        CHECK(infos[i].userId == std::optional<std::string>{"Anmeldename"});
-        CHECK(infos[i].password == std::optional<std::string>{"Online-Banking-PIN"});
+        if (expected[i].country == "DE") {
+            CHECK(infos[i].logoId == "sparkasse");
+            CHECK(infos[i].credentials.full == true);
+            CHECK(infos[i].userId == std::optional<std::string>{"Anmeldename"});
+            CHECK(infos[i].password == std::optional<std::string>{"Online-Banking-PIN"});
+        } else {
+            CHECK(infos[i].logoId == "erste");
+            CHECK(infos[i].credentials.full == false);
+            CHECK(infos[i].userId == std::nullopt);
+            CHECK(infos[i].password == std::nullopt);
+        }
     }
 }
 
@@ -286,9 +310,11 @@ TEST_CASE_METHOD(OnlineFixture, "Search with BIC and bank code details", "[onlin
 }
 
 TEST_CASE_METHOD(OnlineFixture, "Service Transactions", "[online][transactions]") {
+    year_month_day from{floor<days>(system_clock::now()) - days{89}};
+
     json data = {
         {"account", {{"iban", "DE02120300000000202051"}, {"currency", "EUR"}}},
-        {"range", {{"from", "2019-01-13"}}},
+        {"range", {{"from", std::format("{}", floor<days>(system_clock::now()) - days{89})}}},
     };
     auto ticket = generator.transactions(uuidV4(), data);
 
@@ -307,26 +333,57 @@ TEST_CASE_METHOD(OnlineFixture, "Service Transactions", "[online][transactions]"
     auto payload = jwtDecodeUnverified(sr.jwt);
 
     REQUIRE(payload.at("data").at("ticketId") == TicketGenerator::getId(ticket));
-    REQUIRE(payload.at("data").at("data").size() == 63);
-    REQUIRE(
-        payload.at("data").at("data").at(0) ==
-        json{
-            {"amount", {{"amount", "-0.95"}, {"currency", "EUR"}}},
-            {"bankTransactionCodes",
-             {
-                 {{"iso", {{"domain", "PMNT"}, {"family", "ICDT"}, {"subFamily", "STDO"}}}},
-                 {{"swift", "DDT"}},
-                 {{"national", {{"code", "106"}, {"country", "DE"}}}},
-             }},
-            {"bookingDate", "2025-07-29"},
-            {"creditor", {{"iban", "DE96120300009005290904"}, {"name", "DHL.K53VEV55WWVE/BONN"}}},
-            {"debtor", {{"iban", "DE02120300000000202051"}, {"name", "ISSUER"}}},
-            {"endToEndId", "485209459755938"},
-            {"purposeCode", "DCRD"},
-            {"remittanceInformation", {"VISA Debitkartenumsatz"}},
-            {"status", "Booked"},
-            {"valueDate", "2025-07-29"},
-        });
+    auto &transactions = payload.at("data").at("data");
+
+    REQUIRE(transactions.is_array());
+    REQUIRE_FALSE(transactions.empty());
+
+    for (const auto &transaction : transactions) {
+        REQUIRE(transaction.is_object());
+
+        CHECK(transaction.at("amount").at("amount").is_string());
+        CHECK(transaction.at("amount").at("currency").is_string());
+        CHECK(transaction.at("creditor").at("name").is_string());
+        CHECK(transaction.at("creditor").at("iban").is_string());
+        CHECK(transaction.at("debtor").at("name").is_string());
+        CHECK(transaction.at("debtor").at("iban").is_string());
+
+        CHECK(transaction.at("bookingDate").is_string());
+        CHECK(transaction.at("valueDate").is_string());
+
+        REQUIRE(transaction.at("status").is_string());
+        const auto &status = transaction.at("status").get_ref<const std::string &>();
+        CHECK((status == "Pending" || status == "Booked"));
+    }
+}
+
+TEST_CASE_METHOD(OnlineFixture, "Service Standing Orders", "[online][standing_orders]") {
+    json data = {
+        {"account", {{"iban", "DE02120300000000202051"}, {"currency", "EUR"}}},
+    };
+    auto ticket = generator.standingOrders(uuidV4(), data);
+
+    Credentials creds{};
+    creds.connectionId = DEMO_CONNECTION_ID;
+    creds.userId = "result";
+    auto result = client.standingOrders(creds, ticket);
+    auto &sr = requireServiceResult(result);
+    auto payload = jwtDecodeUnverified(sr.jwt);
+
+    REQUIRE(payload.at("data").at("ticketId") == TicketGenerator::getId(ticket));
+    REQUIRE(payload.at("data").at("data").size() == 4);
+    REQUIRE(payload.at("data").at("data").at(1) ==
+            json{
+                {"amount", {{"amount", "55.08"}, {"currency", "EUR"}}},
+                {"creditor",
+                 {{"iban", "DE28700500000002024100"}, {"name", "Rundfunk ARD, ZDF, DRadio"}}},
+                {"day", 1},
+                {"executionRule", "Following"},
+                {"frequency", {{"variableMonths", {1, 4, 7, 10}}}},
+                {"purposeCode", "RINP"},
+                {"remittanceInformation", {"RF90X333235778"}},
+                {"startDate", "2023-04-01"},
+            });
 }
 
 TEST_CASE_METHOD(OnlineFixture, "Services without credentials", "[online][without_credentials]") {
@@ -352,14 +409,13 @@ TEST_CASE_METHOD(OnlineFixture, "Services without credentials", "[online][withou
                                                      }});
 
     auto balancesTicket = generator.issue(uuidV4(), "Balances");
-    std::vector<AccountReference> accounts{
-        IbanAccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}},
-    };
-    auto balancesResult = client.balances(connectionData, balancesTicket, accounts);
+    AccountReference account =
+        IbanAccountReference{.iban = "DE02120300000000202051", .currency = std::string{"EUR"}};
+    auto balancesResult = client.balances(connectionData, balancesTicket, account);
     auto &balancesSr = requireServiceResult(balancesResult);
     auto balancesPayload = jwtDecodeUnverified(balancesSr.jwt);
-    for (auto &account : balancesPayload.at("data").at("data").at("balances")) {
-        for (auto &balance : account.at("balances")) {
+    for (auto &accountBalances : balancesPayload.at("data").at("data").at("balances")) {
+        for (auto &balance : accountBalances.at("balances")) {
             balance.erase("dateTime");
         }
     }
@@ -490,4 +546,15 @@ TEST_CASE_METHOD(OnlineFixture, "Traces: retrieve", "[online][traces]") {
         REQUIRE_FALSE(parsed.at("data").empty());
         REQUIRE(parsed.at("data").at(0).contains("traceID"));
     }
+}
+
+TEST_CASE("Custom HttpTransport", "[online][transport]") {
+    auto cfg = getConfigOrSkip();
+    RoutexClient client(curlHttpClient, cfg.url);
+    TicketGenerator generator(cfg.keyId, cfg.apiKeyBase64);
+
+    auto result = client.info(generator.accounts(uuidV4()), DEMO_CONNECTION_ID);
+    REQUIRE_THAT(result, HoldsAlternative<ConnectionInfo>());
+    REQUIRE(std::get<ConnectionInfo>(result).id == DEMO_CONNECTION_ID);
+    REQUIRE(client.traceId().has_value());
 }

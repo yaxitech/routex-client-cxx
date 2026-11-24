@@ -17,6 +17,7 @@ set_property(CACHE YAXI_SANITIZER PROPERTY STRINGS
     off address undefined address+undefined thread memory)
 
 option(YAXI_BUILD_RUST_LIB "Build the Rust component via cargo as part of this build" ON)
+option(YAXI_BUILTIN_HTTP "Build the Rust component with its built-in HTTP stack" ON)
 
 set(YAXI_INCLUDE_DIR "${YAXI_REPO_ROOT}/include" CACHE PATH "YAXI public include directory")
 set(YAXI_CARGO_TARGET "" CACHE STRING "cargo --target triple (empty = host)")
@@ -197,6 +198,7 @@ if(YAXI_BUILD_RUST_LIB)
             -DWORKING_DIR=${YAXI_REPO_ROOT}
             $<$<NOT:$<CONFIG:Debug>>:-DRELEASE=1>
             $<$<BOOL:${YAXI_CARGO_TARGET}>:-DCARGO_TARGET=${YAXI_CARGO_TARGET}>
+            $<$<NOT:$<BOOL:${YAXI_BUILTIN_HTTP}>>:-DNO_DEFAULT_FEATURES=1>
             $<$<AND:$<BOOL:${MSVC}>,$<CONFIG:Debug>>:-DDEBUG_FLAGS_PS1=${YAXI_REPO_ROOT}/scripts/debug-flags.ps1>
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_rust.cmake"
         BYPRODUCTS ${_rust_byproducts}
@@ -254,6 +256,10 @@ endif()
 
 set_target_properties(YAXI::Client PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${YAXI_INCLUDE_DIR}")
+
+if(NOT YAXI_BUILTIN_HTTP)
+    target_compile_definitions(YAXI::Client INTERFACE YAXI_NO_BUILTIN_HTTP)
+endif()
 
 # System libraries the Rust static lib links against (platform-dependent).
 target_link_libraries(YAXI::Client INTERFACE
