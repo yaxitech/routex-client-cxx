@@ -41,14 +41,10 @@ template <typename T> T unwrap(Result<T> r) {
     return std::get<T>(std::move(r));
 }
 
-// The client performs no HTTP itself: supply your application's HTTP stack
-HttpTransport transport = [](const HttpRequest& request) -> HttpResponse {
-    // Send request.method to request.url with request.headers and request.body
-    // and return the status, headers and body. Throw on transport failure.
-};
-
-// Pass "https://integration.yaxi.tech" for the integration environment
-RoutexClient client(transport);
+// Uses the built-in HTTP stack. Pass an HttpTransport to use your application's own
+// (required on Android), and "https://integration.yaxi.tech" as the URL for the
+// integration environment.
+RoutexClient client;
 
 // ticket: a YAXI service ticket issued by your backend (see docs)
 

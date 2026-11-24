@@ -50,7 +50,7 @@ class HoldsAlternativeMatcher : public Catch::Matchers::MatcherGenericBase {
 
 template <typename T> HoldsAlternativeMatcher<T> HoldsAlternative() { return {}; }
 
-// A libcurl-backed HttpTransport. Drives the [online] tests and doubles as an
+// A libcurl-backed HttpTransport. Drives the [online] transport test and doubles as an
 // example implementation of the yaxi::HttpTransport callback. It creates a fresh
 // handle per request; a production transport should reuse connections, DNS
 // lookups and TLS sessions (one reused easy handle, or a CURLSH share across
@@ -70,7 +70,13 @@ class OnlineFixture {
 
   private:
     explicit OnlineFixture(Config cfg)
-        : client(curlHttpClient, cfg.url), generator(cfg.keyId, cfg.apiKeyBase64) {}
+#ifdef YAXI_NO_BUILTIN_HTTP
+        : client(curlHttpClient, cfg.url),
+#else
+        : client({}, cfg.url),
+#endif
+          generator(cfg.keyId, cfg.apiKeyBase64) {
+    }
 };
 
 } // namespace yaxi::test

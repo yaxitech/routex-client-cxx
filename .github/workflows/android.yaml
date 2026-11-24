@@ -87,10 +87,12 @@ jobs:
         run: |
           apk=consumer-test/build/outputs/apk/debug/consumer-test-debug.apk
           for abi in arm64-v8a armeabi-v7a x86_64; do
-            if ! unzip -l "$apk" | grep -q "lib/$abi/libroutex-client.so"; then
-              echo "::error::libroutex-client.so is missing from the APK for $abi"
-              exit 1
-            fi
+            for lib in libroutex-client.so libc++_shared.so; do
+              if ! unzip -l "$apk" | grep -q "lib/$abi/$lib"; then
+                echo "::error::$lib is missing from the APK for $abi"
+                exit 1
+              fi
+            done
           done
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

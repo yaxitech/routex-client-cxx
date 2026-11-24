@@ -28,6 +28,9 @@ target_link_libraries(app PRIVATE routex-client::routex-client)
 passes `std::string`, `std::vector` and `std::variant` across the library
 boundary, so both sides need the same standard library.
 
+There is no built-in HTTP stack on Android: the `RoutexClient` constructor requires an
+`HttpTransport`, typically backed by the app's own HTTP client.
+
 Two modules sit over the same headers, `routex-client` (shared) and
 `routex-client-static`. Link one or the other; neither needs anything added to the
 link line.

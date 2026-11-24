@@ -96,7 +96,9 @@ android {
     packaging {
         // The shared library reaches the consumer's APK through the prefab
         // package; the jni/ copy AGP adds by default would ship it twice.
-        jniLibs.excludes += "**/libroutex-client.so"
+        // libc++_shared.so comes from the consumer's own c++_shared build, and
+        // another AAR shipping it too would make the consumer need pickFirsts.
+        jniLibs.excludes += listOf("**/libroutex-client.so", "**/libc++_shared.so")
     }
 }
 

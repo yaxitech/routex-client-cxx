@@ -4,6 +4,7 @@
 
 #include "routex-client-cxx/src/internal.h"
 #include "routex-client-cxx/src/lib.rs.h"
+#include "rust/cxx.h"
 #include "yaxi/routex-client.h"
 
 using namespace std;
@@ -199,15 +200,20 @@ template <typename... Ts> struct overloaded : Ts... {
 template <typename... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 internal::AccountReference convert_account_reference(const AccountReference &ref) {
-    return visit(overloaded{[](const IbanAccountReference &r) {
-                                return internal::AccountReference{make_unique<string>(r.iban),
-                                                                  nullptr, to_ptr(r.currency)};
-                            },
-                            [](const NumberAccountReference &r) {
-                                return internal::AccountReference{
-                                    nullptr, make_unique<string>(r.number), to_ptr(r.currency)};
-                            }},
-                 ref);
+    return visit(
+        overloaded{[](const IbanAccountReference &r) {
+                       return internal::AccountReference{make_unique<string>(r.iban), nullptr,
+                                                         nullptr, to_ptr(r.currency)};
+                   },
+                   [](const NumberAccountReference &r) {
+                       return internal::AccountReference{nullptr, make_unique<string>(r.number),
+                                                         nullptr, to_ptr(r.currency)};
+                   },
+                   [](const MaskedPanAccountReference &r) {
+                       return internal::AccountReference{
+                           nullptr, nullptr, make_unique<string>(r.maskedPan), to_ptr(r.currency)};
+                   }},
+        ref);
 }
 
 internal::DebtorAccountReference
@@ -222,6 +228,8 @@ convert_debtor_account_reference(const DebtorAccountReference &ref) {
 const AccountField::OptionalStringField AccountField::Iban{uint8_t(internal::AccountField::Iban)};
 const AccountField::OptionalStringField AccountField::Number{
     uint8_t(internal::AccountField::Number)};
+const AccountField::OptionalStringField AccountField::MaskedPan{
+    uint8_t(internal::AccountField::MaskedPan)};
 const AccountField::OptionalStringField AccountField::Bic{uint8_t(internal::AccountField::Bic)};
 const AccountField::OptionalStringField AccountField::BankCode{
     uint8_t(internal::AccountField::BankCode)};
@@ -436,13 +444,6 @@ struct RoutexClient::Inner {
 };
 
 namespace {
-HttpTransport require_transport(HttpTransport transport) {
-    if (!transport) {
-        throw std::invalid_argument("HttpTransport must not be empty");
-    }
-    return transport;
-}
-
 // Throws `std::invalid_argument` with the reason from the Rust side, unless it is empty.
 void require_valid(const rust::String &error) {
     if (!error.empty()) {
@@ -455,12 +456,25 @@ unique_ptr<string> require_valid_url(const optional<string> &url) {
     require_valid(validate_url(ptr));
     return ptr;
 }
+
+rust::Box<internal::RoutexClient> new_client(HttpTransport transport, const optional<string> &url) {
+    auto url_ptr = require_valid_url(url);
+#ifdef YAXI_NO_BUILTIN_HTTP
+    if (!transport) {
+        throw std::invalid_argument("HttpTransport must not be empty");
+    }
+#endif
+    try {
+        return new_routex_client(
+            transport ? std::make_shared<HttpTransport>(std::move(transport)) : nullptr, url_ptr);
+    } catch (const rust::Error &err) {
+        throw std::runtime_error(err.what());
+    }
+}
 } // namespace
 
 RoutexClient::RoutexClient(HttpTransport transport, const optional<string> &url)
-    : inner(make_unique<Inner>(new_routex_client(
-          std::make_shared<HttpTransport>(require_transport(std::move(transport))),
-          require_valid_url(url)))) {}
+    : inner(make_unique<Inner>(new_client(std::move(transport), url))) {}
 
 RoutexClient::~RoutexClient() = default;
 
@@ -595,22 +609,21 @@ Result<ServiceResponse> RoutexClient::confirmAccounts(const string &ticket,
 
 Result<ServiceResponse>
 RoutexClient::balances(const std::variant<Credentials, ConnectionData> &access,
-                       const string &ticket, const vector<AccountReference> &accounts,
+                       const string &ticket, const AccountReference &account,
                        const optional<Session> &session,
                        const optional<bool> &recurringConsents) const {
-    auto convertedAccounts =
-        convert_vec<internal::AccountReference>(accounts, convert_account_reference);
+    auto convertedAccount = convert_account_reference(account);
 
     return visit(overloaded{[&](const Credentials &credentials) {
                                 return service_result(inner->bridge->balances(
                                     credentials.connectionId, to_ptr(credentials.userId),
                                     to_ptr(credentials.password),
-                                    to_ptr(credentials.connectionData), ticket, convertedAccounts,
+                                    to_ptr(credentials.connectionData), ticket, convertedAccount,
                                     to_ptr(session), to_tri_bool(recurringConsents)));
                             },
                             [&](const ConnectionData &connectionData) {
                                 return service_result(inner->bridge->balances_without_credentials(
-                                    connectionData, ticket, convertedAccounts, to_ptr(session)));
+                                    connectionData, ticket, convertedAccount, to_ptr(session)));
                             }},
                  access);
 }
@@ -653,6 +666,28 @@ Result<ServiceResponse> RoutexClient::respondTransactions(const string &ticket,
 Result<ServiceResponse>
 RoutexClient::confirmTransactions(const string &ticket, const ConfirmationContext &context) const {
     return service_result(inner->bridge->confirm_transactions(ticket, context));
+}
+
+Result<ServiceResponse>
+RoutexClient::standingOrders(const Credentials &credentials, const string &ticket,
+                             const optional<Session> &session,
+                             const optional<bool> &recurringConsents) const {
+    return service_result(inner->bridge->standing_orders(
+        credentials.connectionId, to_ptr(credentials.userId), to_ptr(credentials.password),
+        to_ptr(credentials.connectionData), ticket, to_ptr(session),
+        to_tri_bool(recurringConsents)));
+}
+
+Result<ServiceResponse> RoutexClient::respondStandingOrders(const string &ticket,
+                                                            const InputContext &context,
+                                                            const string &response) const {
+    return service_result(inner->bridge->respond_standing_orders(ticket, context, response));
+}
+
+Result<ServiceResponse>
+RoutexClient::confirmStandingOrders(const string &ticket,
+                                    const ConfirmationContext &context) const {
+    return service_result(inner->bridge->confirm_standing_orders(ticket, context));
 }
 
 Result<ServiceResponse>

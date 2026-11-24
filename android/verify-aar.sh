@@ -49,8 +49,8 @@ ndk_at_least() {
     [ -n "$got" ] && [ "$got" -ge "$2" ]
 }
 
-not_duplicated() {
-    ! find "$dir/jni" -name 'libroutex-client.so' 2>/dev/null | grep -q .
+no_jni_libs() {
+    ! find "$dir/jni" \( -name 'libroutex-client.so' -o -name 'libc++_shared.so' \) 2>/dev/null | grep -q .
 }
 
 aligned_16k() {
@@ -67,8 +67,8 @@ if [ -f "$pkg/prefab.json" ]; then
     check "package is named routex-client" json_field "$pkg/prefab.json" '"name":"routex-client"'
     check "schema_version is 2" json_field "$pkg/prefab.json" '"schema_version":2'
 fi
-# The jni/ copy is excluded so the library ships once; libc++_shared.so stays.
-check "shared library is not duplicated in jni/" not_duplicated
+# The consumer's APK gets both libraries elsewhere, so nothing ships in jni/.
+check "no shared libraries in jni/" no_jni_libs
 
 for module in routex-client routex-client-static; do
     echo "module $module"

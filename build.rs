@@ -5,6 +5,14 @@ fn main() {
         .file("src/lib.cc")
         .std("c++17")
         .flag_if_supported("-pedantic-errors");
+    println!("cargo:rustc-check-cfg=cfg(builtin_http)");
+    if std::env::var_os("CARGO_FEATURE_REQWEST").is_some()
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android")
+    {
+        println!("cargo:rustc-cfg=builtin_http");
+    } else {
+        build.define("YAXI_NO_BUILTIN_HTTP", None);
+    }
     #[cfg(windows)]
     if target_is_windows() {
         configure_windows(&mut build);
