@@ -2,9 +2,7 @@
 version = 2
 yanked = "deny"
 ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "No upstream fix available (see https://github.com/RustCrypto/RSA/issues/19). The crate is only used to verify RSA signatures, not for decryption or signing, so it doesn't do operations with a private RSA key." },
     { id = "RUSTSEC-2024-0436", reason = "Informational advisory: crate is unmaintained. As a feature-complete proc-macro with narrow scope, it carries no runtime risk, and any future issue would surface at build time." },
-    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 comes in through the P-256/P-384 ECDSA of clerk-report and jsonwebtoken, which only verify signatures with public keys, so it doesn't do operations on secret integers." },
     { id = "RUSTSEC-2026-0543", reason = "Informational advisory: chrono is unmaintained, with no maintained alternative available yet." },
 ]
 
