@@ -1,6 +1,6 @@
 [package]
 name = "routex-client-cxx"
-version = "0.4.0"
+version = "0.4.1"
 build = "build.rs"
 edition = "2024"
 rust-version = "1.88"
@@ -17,11 +17,11 @@ chrono = { version = "0.4.34", default-features = false }
 cxx = "1.0.150"
 futures = "0.3"
 http = "1"
-jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto"] }
 paste = "1.0.2"
-routex-api = { version = "0.32", default-features = false }
-routex-client = { version = "0.22", default-features = false }
-routex-client-common = { version = "0.0.7", features = ["error"] }
+routex-api = { version = "0.33", default-features = false }
+routex-client = { version = "0.23", default-features = false }
+routex-client-common = { version = "0.0.8", features = ["error"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "http2", "rustls"], optional = true }

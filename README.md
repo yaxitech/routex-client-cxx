@@ -9,16 +9,10 @@ See the [documentation](https://docs.yaxi.tech) for the full API reference.
 
 ## Installation
 
-Requires Windows, MSVC, and C++17 or newer. Available on NuGet as [`routex-client-cxx`](https://www.nuget.org/packages/routex-client-cxx):
+Requires C++17 or newer.
 
-```xml
-<!-- packages.config -->
-<packages>
-  <package id="routex-client-cxx" version="0.3.0" targetFramework="native" />
-</packages>
-```
-
-Visual Studio's NuGet Package Manager wires the matching `<Import>` entries into your `.vcxproj` automatically.
+- Windows (MSVC): [`routex-client-cxx`](https://www.nuget.org/packages/routex-client-cxx) on NuGet. Visual Studio's NuGet Package Manager wires the matching `<Import>` entries into your `.vcxproj` automatically.
+- Android (NDK): [`tech.yaxi:routex-client-cxx`](https://central.sonatype.com/artifact/tech.yaxi/routex-client-cxx) on Maven Central. See [`android/`](android/README.md) for the Gradle and CMake setup.
 
 ## Usage
 
